@@ -37,9 +37,9 @@
  * user, bot) never appear in results, audit metadata or logs.
  */
 import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { createHash, randomBytes } from "node:crypto";
 import { getAppOrigin } from "@/lib/approvals/tokens";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { getEmployee } from "@/lib/data/employees";
 import { getNotificationChannelSecretsById, listNotificationChannels } from "@/lib/data/notification-channels";
 import {
@@ -282,7 +282,8 @@ export async function issueSlackAuthorizeLink(input: {
 }): Promise<IssueAuthorizeLinkResult> {
   const { orgId } = input;
   const failed = async (result: Extract<IssueAuthorizeLinkResult, { ok: false }>) => {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_authorize_link" } }),
       orgId,
       employeeId: input.employeeId || null,
       credentialId: null,
@@ -428,7 +429,8 @@ export async function issueSlackAuthorizeLink(input: {
     );
     approverNoticeSent = notice.ok;
   }
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_authorize_link" } }),
     orgId,
     employeeId: employee.id,
     credentialId: null,
@@ -562,7 +564,8 @@ export async function completeAuthorizeLinkCallback(input: {
       approverFailureNoticeSent: notices.approverSent,
       ...(notices.approverSkipped ? { approverFailureNoticeSkipped: notices.approverSkipped } : {}),
     };
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_authorize_link" } }),
       orgId,
       employeeId,
       credentialId: null,
@@ -634,7 +637,8 @@ export async function completeAuthorizeLinkCallback(input: {
   const name = employee?.displayName || employeeId;
   const wasPinned = Boolean(link.expectedSlackUserId);
   await step("completed_audit", async () => {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_authorize_link" } }),
       orgId,
       employeeId,
       credentialId: null,
@@ -689,7 +693,8 @@ export async function completeAuthorizeLinkCallback(input: {
     try {
       const steps = failed.map((f) => f.step);
       const next = await resolveAuthorizeLinkFollowUpNextStep(employeeId, steps);
-      await appendAuditEvent({
+      await appendAdminAuditEvent({
+        actor: await resolveAdminAuditActor({ orgId, fallbackHuman: { email: "slack_authorize_link" } }),
         orgId,
         employeeId,
         credentialId: null,

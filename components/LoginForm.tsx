@@ -1,10 +1,13 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import Script from "next/script";
 import {
   SESSION_REQUIRED_MESSAGE,
   loginErrorMessage,
 } from "@/lib/auth/login-errors";
+
+const TURNSTILE_SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js";
 
 export function LoginForm({
   next,
@@ -12,12 +15,14 @@ export function LoginForm({
   initialEmail,
   initialError,
   sessionNotice,
+  turnstileSiteKey,
 }: {
   next: string;
   demo: boolean;
   initialEmail: string;
   initialError?: string | null;
   sessionNotice?: boolean;
+  turnstileSiteKey?: string | null;
 }) {
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
@@ -31,18 +36,35 @@ export function LoginForm({
     setError(loginErrorMessage(code, status));
   }
 
+  function resetTurnstile() {
+    const turnstile = (window as Window & { turnstile?: { reset: () => void } }).turnstile;
+    try {
+      turnstile?.reset();
+    } catch {
+      // Widget may already be gone; the next render gets a fresh token.
+    }
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     setError("");
     try {
+      const turnstileToken = turnstileSiteKey
+        ? String(new FormData(event.currentTarget).get("cf-turnstile-response") || "")
+        : undefined;
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: {
           "content-type": "application/json",
           accept: "application/json",
         },
-        body: JSON.stringify({ email, password, next }),
+        body: JSON.stringify({
+          email,
+          password,
+          next,
+          ...(turnstileToken !== undefined ? { turnstileToken } : {}),
+        }),
       });
 
       if (response.redirected) {
@@ -56,6 +78,7 @@ export function LoginForm({
           window.location.assign(next || "/app");
           return;
         }
+        resetTurnstile();
         showFailure(response.status === 429 ? "rate_limited" : "login_failed", response.status);
         return;
       }
@@ -68,12 +91,14 @@ export function LoginForm({
       };
 
       if (!response.ok || body.error) {
+        resetTurnstile();
         showFailure(body.error, response.status);
         return;
       }
 
       window.location.assign(body.next || next || "/app");
     } catch {
+      resetTurnstile();
       showFailure("login_failed");
     } finally {
       setBusy(false);
@@ -132,6 +157,17 @@ export function LoginForm({
             className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
           />
         </label>
+        {turnstileSiteKey ? (
+          <>
+            <Script src={TURNSTILE_SCRIPT_SRC} strategy="afterInteractive" />
+            <div
+              className="cf-turnstile"
+              data-sitekey={turnstileSiteKey}
+              data-action="login"
+              data-language="ja"
+            />
+          </>
+        ) : null}
         <button type="submit" className="btn btn-primary w-full" disabled={busy}>
           {busy ? "サインイン中…" : demo ? "デモでダッシュボードへ" : "ログイン"}
         </button>

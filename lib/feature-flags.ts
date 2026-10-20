@@ -329,17 +329,39 @@ export function isLpLeadPageDbEnabled(): boolean {
 }
 
 /**
- * LP_INQUIRY_RATE_LIMIT_ENABLED: IP-hash rate limiting for LP forms.
+ * LP_INQUIRY_RATE_LIMIT_ENABLED: IP-hash rate limiting for LP forms
+ * (consult / inquiry POST and journeys chat start).
  *
  * When ON:
- * - Rate limit by hashed IP address.
- * - Returns 429 when exceeded.
+ * - Rate limit by HMAC(IP_HASH_KEY, IP) plus a process-global cap.
+ * - Returns 429 + Retry-After (Japanese message) when exceeded.
+ * - Missing IP_HASH_KEY → 503 fail-closed. Honeypot / Turnstile still run.
  *
  * When OFF (default):
- * - No rate limiting.
+ * - This flag adds no limiter. Existing bot-protection rate limits (if that
+ *   flag is ON) are unchanged.
  */
 export function isLpInquiryRateLimitEnabled(): boolean {
   return parseFlag(process.env.LP_INQUIRY_RATE_LIMIT_ENABLED);
+}
+
+/**
+ * LP_INQUIRY_FIXED_SUBJECT_ENABLED: LP consult-form notify mail uses a
+ * fixed subject (prefix + receipt id only). User-controlled strings go
+ * only into escaped body fields.
+ *
+ * When ON:
+ * - Subject is `【AI社員パック問い合わせ】{受付番号}`.
+ * - Company / name / email / use-case etc. appear only in HTML-escaped
+ *   table cells. Newlines and control characters are stripped; length is
+ *   capped. Email and URLs are plain text (no mailto / href).
+ *
+ * When OFF (default):
+ * - Today's subject `【AI社員パック問い合わせ】{会社} - {名前}様` and
+ *   mailto link in the body are unchanged.
+ */
+export function isLpInquiryFixedSubjectEnabled(): boolean {
+  return parseFlag(process.env.LP_INQUIRY_FIXED_SUBJECT_ENABLED);
 }
 
 /**
@@ -461,6 +483,37 @@ export function isSignupAttemptLogEnabled(): boolean {
  */
 export function isSignupRateLimitEnabled(): boolean {
   return parseFlag(process.env.SIGNUP_RATE_LIMIT_ENABLED);
+}
+
+/**
+ * SIGNUP_RATE_LIMIT_REQUIRED_ENABLED: make Layer 2 per-IP / per-mailbox
+ * signup rate limits mandatory before welcome / trial mail.
+ *
+ * When ON:
+ * - evaluateSignupLayer2 always applies those limits (even if
+ *   SIGNUP_RATE_LIMIT_ENABLED is OFF).
+ * - Missing attempt store, unreadable store, or missing IP hash → 503
+ *   fail-closed. Signup does not create an account and does not send mail.
+ * - Attempt rows are written even if SIGNUP_ATTEMPT_LOG_ENABLED is OFF, so
+ *   the counters have somewhere to live. Insert failure → do not send mail.
+ *
+ * When OFF (default):
+ * - Today's fail-open Layer 2 is unchanged. Mail still goes out.
+ */
+export function isSignupRateLimitRequiredEnabled(): boolean {
+  return parseFlag(process.env.SIGNUP_RATE_LIMIT_REQUIRED_ENABLED);
+}
+
+/**
+ * LOGIN_RATE_LIMIT_ENABLED: app-side login attempt limits (IP+account, plus a
+ * per-IP spray cap). In-memory / per-instance; Supabase Auth still has its own
+ * limits. Missing IP_HASH_KEY or a full bucket store fails closed (503 / deny).
+ *
+ * When OFF (default): POST /api/auth/login is unchanged (no extra limiter,
+ * no IP_HASH_KEY requirement).
+ */
+export function isLoginRateLimitEnabled(): boolean {
+  return parseFlag(process.env.LOGIN_RATE_LIMIT_ENABLED);
 }
 
 /**
@@ -701,6 +754,24 @@ export function isApprovalReasonsEnabled(): boolean {
 }
 
 /**
+ * APPROVAL_MAIL_SUBJECT_NO_SUMMARY_ENABLED: approval notify mail subject
+ * is fixed text + kind + short id. AI / requester summary stays in the
+ * escaped body only.
+ *
+ * When ON:
+ * - Needed: `[Staffpass] 承認リクエスト {kind} {id}`
+ * - Resolved: `[Staffpass] 承認結果 {kind} {id}`
+ * - kind / id are sanitized (no control chars). Missing meta → ticket / unknown.
+ *
+ * When OFF (default):
+ * - Needed subject remains `[要対応] AI社員の承認リクエスト（{risk}）`.
+ * - Resolved subject remains `[AI社員] 承認が解決されました（{結果}）`.
+ */
+export function isApprovalMailSubjectNoSummaryEnabled(): boolean {
+  return parseFlag(process.env.APPROVAL_MAIL_SUBJECT_NO_SUMMARY_ENABLED);
+}
+
+/**
  * 木村 2026-10-09 B (triage #1④): comm.send with no explicit class defaults to
  * internal + summary only when the destination is internal in the credential
  * org's channel ledger (internal channel / internal DM route) and the resolved
@@ -729,6 +800,47 @@ export function isMcpOAuthFlagOn(): boolean {
 /** Dynamic Client Registration (RFC 7591; deprecated in MCP 2026-07-28). Default OFF. Needs MCP_OAUTH_ENABLED too. */
 export function isMcpOAuthDcrFlagOn(): boolean {
   return parseFlag(process.env.MCP_OAUTH_DCR_ENABLED);
+}
+
+/**
+ * MCP_EMPLOYEE_BADGE_MCP_ENABLED (default OFF).
+ *
+ * When ON:
+ * - /api/mcp/employee is a badge-only mouth (404 while OFF). It never
+ *   advertises OAuth (no WWW-Authenticate resource_metadata, no server-card
+ *   auth.oauth, no OAuth initialize sentence). sp_at_ is refused.
+ * - On /api/mcp, a request that looks like a static-badge attempt (Authorization
+ *   present — including empty / unexpanded `${env:…}` — or
+ *   x-staffpass-credential) does not get an OAuth challenge. Unauthenticated
+ *   requests (no header) still get resource_metadata so Claude / ChatGPT
+ *   discovery is unchanged. 401 JSON-RPC errors on a badge attempt include
+ *   one Japanese nextStepJa that does not say whether a secret exists.
+ *
+ * When OFF (default): /api/mcp/employee is 404; /api/mcp is byte-identical
+ * to today (empty Bearer still gets the OAuth challenge when OAuth is ON).
+ */
+export function isEmployeeBadgeMcpEnabled(): boolean {
+  return parseFlag(process.env.MCP_EMPLOYEE_BADGE_MCP_ENABLED);
+}
+
+/**
+ * WHOAMI_CREDENTIAL_INFO_ENABLED (default OFF).
+ *
+ * When ON, staffpass_whoami adds:
+ * - credential.kind (gb_emp | oauth) and credential.expiresAt (ISO, or null
+ *   when the 社員証 has no expiry). OAuth uses the 社員証 expiry, never the
+ *   access-token TTL.
+ * - org.name for the caller's tenant only.
+ * - expiringSoon + nextStepJa when that expiry is within 7 days (or already
+ *   expired, if a race lets the call through; auth itself is 401).
+ *
+ * Never includes credential id, secret, prefix, hash, or another employee/org.
+ * /api/mcp and /api/mcp/employee share the same payload builder.
+ *
+ * When OFF (default): whoami JSON is byte-identical to today.
+ */
+export function isWhoamiCredentialInfoEnabled(): boolean {
+  return parseFlag(process.env.WHOAMI_CREDENTIAL_INFO_ENABLED);
 }
 
 /**
@@ -791,6 +903,62 @@ export function isMailSendGmailLiveEnabled(): boolean {
 }
 
 /**
+ * MAIL_UNVERIFIED_FROM_ENABLED (default OFF): unverified-recipient
+ * transactional mail (signup welcome / trial_started) may use
+ * EMAIL_FROM_UNVERIFIED so a third-party replay does not inherit the
+ * production From / DKIM identity.
+ *
+ * When OFF (default): every Resend path keeps EMAIL_FROM (today).
+ * When ON: unverified audience requires EMAIL_FROM_UNVERIFIED; if it is
+ * missing or blank, send is refused (fail-closed, no fallback to EMAIL_FROM).
+ * Verified notices (approval / billing / ops) always stay on EMAIL_FROM.
+ */
+export function isMailUnverifiedFromEnabled(): boolean {
+  return parseFlag(process.env.MAIL_UNVERIFIED_FROM_ENABLED);
+}
+
+/**
+ * WELCOME_MAIL_FIXED_SUBJECT_ENABLED (default OFF): signup welcome /
+ * trial_started / trial_ending mail subjects are fixed Staffpass copy.
+ * orgName (signup-chosen) and other user-controlled strings stay in the
+ * escaped body only.
+ *
+ * When ON:
+ * - Welcome: `ようこそ — Staffpass（AIエージェントの社員証）`
+ * - Trial started: `トライアル開始 — Staffpass（AIエージェントの社員証）`
+ * - Trial ending: `トライアル終了のお知らせ — Staffpass（AIエージェントの社員証）`
+ * - Body orgName is HTML-escaped, control/bidi/zero-width stripped
+ *   (same range as LP inquiry #403), length-capped, and not linkified.
+ *
+ * When OFF (default):
+ * - Today's subjects (`ようこそ — ${orgName} の AI社員 制御面`,
+ *   `トライアル開始（${trialDays}日間）`,
+ *   `トライアル終了まであと ${daysLeft} 日 — ${orgName}`).
+ */
+export function isWelcomeMailFixedSubjectEnabled(): boolean {
+  return parseFlag(process.env.WELCOME_MAIL_FIXED_SUBJECT_ENABLED);
+}
+
+/**
+ * MCP_AUTH_FAILURE_AUDIT_ENABLED (default OFF): write /api/mcp 401/403
+ * auth-failure kinds (missing_credential / invalid / expired) to
+ * mcp_auth_failures (migration 20261016400000). Ids when resolvable; never
+ * the token or its hash. Throttled in SQL. Flag OFF: no read, no write.
+ */
+export function isMcpAuthFailureAuditEnabled(): boolean {
+  return parseFlag(process.env.MCP_AUTH_FAILURE_AUDIT_ENABLED);
+}
+
+/**
+ * MCP_AUTH_401_NEXT_STEP_JA_ENABLED (default OFF): add Japanese nextStepJa
+ * on /api/mcp 401 bodies for missing/empty vs expired vs invalid. Machine-
+ * readable data.code is unchanged. Flag OFF: 401 body identical to today.
+ */
+export function isMcpAuth401NextStepJaEnabled(): boolean {
+  return parseFlag(process.env.MCP_AUTH_401_NEXT_STEP_JA_ENABLED);
+}
+
+/**
  * AI_PEER_WAKE_ALLOWLIST_ENABLED (八坂 GO 2026-10-16): when the speaker is a
  * bound AI employee, other AI employees are woken only if the org allowlisted
  * that pair (A→B, optional channel). Fail-closed: missing/unreadable pair or
@@ -814,6 +982,59 @@ export function isAiPeerWakeAllowlistEnabled(): boolean {
  */
 export function isAiPeerWakeThreadGuardEnabled(): boolean {
   return parseFlag(process.env.AI_PEER_WAKE_THREAD_GUARD_ENABLED);
+}
+
+/**
+ * EMPLOYEE_RETIRE_ENABLED (default OFF): admin MCP employees.retire may file
+ * an always_human ticket. Execution stays on the dashboard (人間のみ).
+ * checkOperable の status=suspended 拒否はフラグに依存しない（hold と同じ）。
+ */
+export function isEmployeeRetireEnabled(): boolean {
+  return parseFlag(process.env.EMPLOYEE_RETIRE_ENABLED);
+}
+
+/**
+ * PASSWORD_RESET_TURNSTILE_ENABLED (default OFF): require Cloudflare Turnstile
+ * on POST /api/auth/forgot-password before resetPasswordForEmail.
+ *
+ * When ON:
+ * - CAPTCHA runs after the email-format check and before send quotas.
+ * - Missing token, failed siteverify, missing keys, missing/wrong action, or
+ *   a hostname outside PASSWORD_RESET_TURNSTILE_HOSTNAMES (default
+ *   staffpass.sealith.com) → do not call Supabase. CAPTCHA error only.
+ * - CAPTCHA failures use a separate IP brake and never return sent=1.
+ * - The /auth/forgot widget is shown only when this flag is ON and a site key
+ *   is present.
+ *
+ * When OFF (default): today's recover path is unchanged (same-origin +
+ * in-process rate limits only; no CAPTCHA).
+ */
+export function isPasswordResetTurnstileEnabled(): boolean {
+  return parseFlag(process.env.PASSWORD_RESET_TURNSTILE_ENABLED);
+}
+
+/**
+ * SUPABASE_AUTH_CAPTCHA_ENABLED (default OFF): pass an unused Turnstile token
+ * to GoTrue as captchaToken on password sign-in and resetPasswordForEmail.
+ *
+ * When ON:
+ * - POST /api/auth/login requires a token and forwards options.captchaToken.
+ *   We do not siteverify it (single-use; Supabase redeems it).
+ * - POST /api/auth/signup still siteverifies the existing signup widget, and
+ *   requires a second unused token for the post-create signInWithPassword.
+ * - POST /api/auth/forgot-password forwards captchaToken. If
+ *   PASSWORD_RESET_TURNSTILE_ENABLED is also ON, that local siteverify keeps
+ *   using a different token; the same token is never reused.
+ *
+ * When OFF (default): Auth payloads match main (no captchaToken key). Local
+ * Turnstile behavior is unchanged.
+ *
+ * Rollout: enable this flag first so login keeps working, then turn on
+ * CAPTCHA in the Supabase Dashboard. Reversing that order rejects sign-in
+ * until captchaToken is sent.
+ */
+export function isSupabaseAuthCaptchaEnabled(): boolean {
+  return parseFlag(process.env.SUPABASE_AUTH_CAPTCHA_ENABLED);
 }
 
 const DEFAULT_AI_PEER_WAKE_CAP = 4;
@@ -903,4 +1124,63 @@ export function isOpsFeedbackEnabled(): boolean {
  */
 export function isOpsWeeklyDigestEnabled(): boolean {
   return parseFlag(process.env.OPS_WEEKLY_DIGEST_ENABLED);
+}
+
+/**
+ * ORG_NAME_INPUT_STRICT_ENABLED (default OFF): strict org name validation at
+ * signup and orgs.create input time.
+ *
+ * When ON:
+ * - Reject bidi control characters (U+202A–202E, U+2066–2069, U+200E/F, U+061C)
+ * - Reject zero-width and invisible characters (U+200B–200D, U+2060, U+FEFF,
+ *   U+00AD, U+180E)
+ * - Reject control characters and CR/LF
+ * - Reject URL-like strings (http/https/javascript/data/vbscript/file/mailto
+ *   schemes, www. prefix, domain-like tokens like example.com or evil.co.jp/x)
+ * - Error messages do not echo the input value.
+ *
+ * False positive avoidance:
+ * - Japanese company names (株式会社スペースツリー, 一般社団法人みらい社中)
+ * - English company names with periods (TOKYO307 Inc., A&B Co., Ltd.)
+ * - Full-width space (正規化後に通常スペースになる)
+ * - Regular periods in names (T.K. Holdings)
+ * - Domain detection is limited to alphanumeric labels + TLD (2+ letters)
+ *
+ * When OFF (default):
+ * - Existing validation behavior preserved.
+ * - Base validation (empty, length, demo placeholder) still applies.
+ */
+export function isOrgNameInputStrictEnabled(): boolean {
+  return parseFlag(process.env.ORG_NAME_INPUT_STRICT_ENABLED);
+}
+
+/**
+ * CREDENTIAL_AUTO_RENEW_ENABLED (default OFF). 社員証 auto-renew (design
+ * 2026-10-16 R1). When OFF, later PRs must not touch credential_renewals,
+ * must not file tickets, and must not open a claim window.
+ *
+ * Global ON is still fail-closed per org: CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST
+ * (comma-separated org UUIDs). Empty / missing / unreadable / non-UUID
+ * entries deny every org while CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST_REQUIRED
+ * is true (the default; unset counts as true). Only an explicit 0 / false /
+ * off / disabled opens the empty-list hatch. Org UUIDs stay in env, never
+ * in source.
+ *
+ * R1 is schema + this gate only. Cron, Slack, HTTP claim, and MCP tools
+ * come in later PRs behind the same flags.
+ */
+export function isCredentialAutoRenewEnabled(): boolean {
+  return parseFlag(process.env.CREDENTIAL_AUTO_RENEW_ENABLED);
+}
+
+/**
+ * CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST_REQUIRED (default true): an empty /
+ * missing allowlist denies EVERY org (fail-closed if the env var is dropped
+ * during the pilot). Only an explicit "0" / "false" / "off" / "disabled"
+ * opens auto-renew to all orgs when the list is empty. A non-empty list
+ * always applies.
+ */
+export function isCredentialAutoRenewOrgAllowlistRequired(): boolean {
+  const v = (process.env.CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST_REQUIRED || "").trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "off" || v === "disabled");
 }

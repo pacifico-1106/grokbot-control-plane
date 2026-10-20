@@ -249,6 +249,66 @@ export async function rotateCredential(
   return { binding, generation };
 }
 
+export async function bumpCredentialGenerationKeepFingerprint(
+  employeeId: string,
+  orgId: string
+): Promise<{ binding: EmployeeBinding; generation: number }> {
+  if (isDemoMode()) {
+    const { bumpCredentialGenerationKeepFingerprint: demoBump } = await import("../bindings");
+    return demoBump(employeeId, orgId);
+  }
+  const row = await ensureBindingRow(employeeId, orgId);
+  if (row.status === "revoked") {
+    throw Object.assign(new Error("binding_revoked"), { code: "revoked" as const });
+  }
+  const generation = row.credentialGeneration + 1;
+  const admin = createSupabaseAdminClient()!;
+  const { data, error } = await admin
+    .from("employee_bindings")
+    .update({
+      credential_generation: generation,
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("employee_id", employeeId)
+    .eq("org_id", orgId)
+    .select("*")
+    .single();
+  if (error || !data) throw new Error(error?.message || "generation_bump_failed");
+  return { binding: mapBindingRow(data as Record<string, unknown>), generation };
+}
+
+export async function moveBindingFingerprintIfCurrent(
+  employeeId: string,
+  orgId: string,
+  expectedCurrent: string,
+  next: string
+): Promise<boolean> {
+  if (!employeeId || !orgId || !expectedCurrent || !next) return false;
+  if (isDemoMode()) {
+    const { demoOverlapFingerprintMoveShouldFail } = await import("./credential-renewals");
+    if (demoOverlapFingerprintMoveShouldFail()) return false;
+    const { moveBindingFingerprintIfCurrent: demoMove } = await import("../bindings");
+    return demoMove(employeeId, orgId, expectedCurrent, next);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return false;
+  const { data, error } = await admin
+    .from("employee_bindings")
+    .update({
+      credential_fingerprint: next,
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("employee_id", employeeId)
+    .eq("org_id", orgId)
+    .eq("credential_fingerprint", expectedCurrent)
+    .select("employee_id")
+    .maybeSingle();
+  if (error) return false;
+  return Boolean(data);
+}
+
 export async function recordHealthSuccess(
   employeeId: string
 ): Promise<EmployeeBinding | undefined> {
@@ -323,7 +383,16 @@ export async function assertExecutable(
   // (admin MCP stuckWatch.retry, egress retries, lib/mcp/tools.ts). Fail-stop.
   const operable = await checkOperable({ orgId: decision.binding.orgId || null, employeeId, phase: "gateway" });
   if (!operable.ok) {
-    return { ok: false, code: operable.code, message: operable.code === "hold_state_unavailable" ? "hold state unavailable; refuse invoke (fail-stop)" : "employee / organization on hold; refuse invoke" };
+    return {
+      ok: false,
+      code: operable.code,
+      message:
+        operable.code === "hold_state_unavailable"
+          ? "hold state unavailable; refuse invoke (fail-stop)"
+          : operable.code === "employee_terminated"
+            ? "employee is retired (contract ended); refuse invoke"
+            : "employee / organization on hold; refuse invoke",
+    };
   }
   return decision;
 }

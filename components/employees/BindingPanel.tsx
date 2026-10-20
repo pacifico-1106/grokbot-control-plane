@@ -38,6 +38,8 @@ export function BindingPanel({
   demoMode = false,
   oauthEnabled = false,
   pendingReissue = null,
+  autoRenewEnabled = false,
+  openRenewal = null,
 }: {
   employeeId: string;
   initial: EmployeeBinding;
@@ -56,6 +58,10 @@ export function BindingPanel({
    * waiting for a human to pick the new 社員証 up (ids + deadline only).
    */
   pendingReissue?: { approvalId: string; pickupUntil: string } | null;
+  /** CREDENTIAL_AUTO_RENEW_ENABLED + org allowlist (server-evaluated). Default off. */
+  autoRenewEnabled?: boolean;
+  /** Open now-renewal (pending_approval / claimable / claimed). Ids + state only. */
+  openRenewal?: { state: string; claimableUntil: string | null } | null;
 }) {
   const [binding, setBinding] = useState<EmployeeBinding>(initial);
   const [alsoRevokeOAuth, setAlsoRevokeOAuth] = useState(false);
@@ -124,6 +130,28 @@ export function BindingPanel({
   }
 
   const [reissuePending, setReissuePending] = useState(pendingReissue);
+  const [renewal, setRenewal] = useState(openRenewal);
+  const [renewBusy, setRenewBusy] = useState(false);
+
+  async function proposeRenewNow() {
+    setRenewBusy(true);
+    setMessage("");
+    try {
+      const res = await fetch(`/api/employees/${employeeId}/renew`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: "now" }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.messageJa || body.message || body.error || "renew_failed");
+      setRenewal({ state: "pending_approval", claimableUntil: null });
+      setMessage(body.nextStepJa || "承認者の Slack に「更新しますか」を送りました。鍵はこの画面には出ません。");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "failed");
+    } finally {
+      setRenewBusy(false);
+    }
+  }
 
   async function rotate(reissueApprovalId?: string) {
     setBusy(true);
@@ -370,6 +398,16 @@ export function BindingPanel({
             社員証を再発行
           </button>
         ) : null}
+        {canRotateCredential && autoRenewEnabled && !renewal ? (
+          <button
+            type="button"
+            className="btn btn-ghost text-sm w-full sm:w-auto"
+            disabled={busy || renewBusy || binding.status === "revoked"}
+            onClick={() => void proposeRenewNow()}
+          >
+            社員証を今すぐ更新
+          </button>
+        ) : null}
         {canRotateCredential && oauthEnabled ? (
           <label className="flex items-center gap-2 text-xs muted">
             <input
@@ -393,6 +431,15 @@ export function BindingPanel({
           </button>
         ) : null}
       </div>
+      {autoRenewEnabled && renewal ? (
+        <p className="text-xs muted leading-relaxed">
+          {renewal.state === "pending_approval"
+            ? "社員証の今すぐ更新は承認待ちです。鍵はこの画面には出ません。"
+            : renewal.state === "claimable"
+              ? `承認済みです。起動スクリプトが受け取るまで古い社員証はそのまま使えます（${formatTs(renewal.claimableUntil)} まで）。鍵はこの画面には出ません。`
+              : "社員証の今すぐ更新が進行中です。鍵はこの画面には出ません。"}
+        </p>
+      ) : null}
       {canManageBinding ? null : (
         <p className="text-[11px] muted">
           連携と接続確認は、組織のオーナーまたは管理者が行います。

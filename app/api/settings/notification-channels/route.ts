@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { appendAdminAuditEvent, humanAdminActor } from "@/lib/audit/admin-audit";
 // PR-D: namespace access (mocks of the flag module elsewhere stay valid).
 import * as featureFlags from "@/lib/feature-flags";
 import {
@@ -108,8 +109,9 @@ export async function PUT(req: Request) {
       deliveryUserId: typeof body.deliveryUserId === "string" ? body.deliveryUserId : "",
     });
     if (!opened.ok) {
-      await appendAuditEvent({
+      await appendAdminAuditEvent({
         orgId: gate.orgId,
+        actor: humanAdminActor(gate.email),
         employeeId: null,
         credentialId: null,
         actorEmail: gate.email,
@@ -218,8 +220,9 @@ export async function PUT(req: Request) {
     const previousDestination = String(existingChannel?.config?.channelId || "");
     if (isSlackApprovalDmAutoOpenEnabled() && (autoOpened || previousDestination !== destination)) {
       const notice = await sendApprovalSetupNotice(slackBotToken, destination);
-      await appendAuditEvent({
+      await appendAdminAuditEvent({
         orgId: gate.orgId,
+        actor: humanAdminActor(gate.email),
         employeeId: null,
         credentialId: null,
         actorEmail: gate.email,

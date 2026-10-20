@@ -82,6 +82,10 @@ const CREDENTIAL_READERS = [
   // service-role read of id / org_id / employee_id / expires_at of non-revoked
   // badges expiring within 7 days, from the daily cron (never secret_hash / prefix).
   "lib/data/credential-expiry-notices.ts",
+  // 社員証 auto-renew R3 overlap (flag CREDENTIAL_AUTO_RENEW_ENABLED):
+  // service-role read of secret_hash only to compare the old fingerprint during
+  // overlap / switchover (never the raw secret or claim_token).
+  "lib/data/credential-renewals.ts",
   "lib/data/employees.ts",
   // MCP Events (2026-10-05): service-role read of revoked_at / expires_at only,
   // re-checking the subscribing badge on every delivery attempt (never secret_hash).
@@ -149,6 +153,10 @@ describe("app: tenant config / credential tables are written only server-side", 
       "lib/data/bindings.ts:employee_bindings:upsert",
       // settings (requireOrgAdminSession), Slack bot install callback (signed state), admin fulfilment
       "lib/data/conversation-adapters.ts:org_conversation_adapters:upsert",
+      // 社員証 auto-renew R3 overlap (flag CREDENTIAL_AUTO_RENEW_ENABLED + org allowlist):
+      // insert the new live row; update revoked_at only if attach fails after insert.
+      "lib/data/credential-renewals.ts:credentials:insert",
+      "lib/data/credential-renewals.ts:credentials:update",
       // directory: settings (requireOrgAdminSession), audience ledger / classifiers, config-change service
       "lib/data/directory.ts:information_assets:upsert",
       "lib/data/directory.ts:org_channels:delete",
@@ -180,6 +188,8 @@ describe("app: tenant config / credential tables are written only server-side", 
       "lib/data/slack-identities.ts:employee_slack_identities:upsert",
       // no caller today
       "lib/data/sns-adapters.ts:org_sns_adapters:upsert",
+      // retire: clear callback_url (dashboard terminate after requireCapability; retireEmployee org-scoped)
+      "lib/employees/retire.ts:employees:update",
       // external contract card: checkout setup / Stripe webhook / portal link (approval-gated)
       "lib/external-contract-card/data.ts:audit_external_contract_card_events:insert",
       "lib/external-contract-card/data.ts:org_external_contract_payment_methods:insert",
@@ -230,6 +240,7 @@ describe("app: tenant config / credential tables are written only server-side", 
     has("app/api/gateway/link/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
     // employee binding link / health probe write employee_bindings → owner/admin only
     has("app/api/employees/[id]/link/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
+    has("app/api/employees/[id]/comm-account/route.ts", /role === "owner"[\s\S]*role === "admin"[\s\S]*requireCapability\(req, "view_employees"\)[\s\S]*export async function POST/);
     has("app/api/employees/[id]/health/route.ts", /export async function POST[\s\S]*requireOrgAdminSession\(\)/);
     // ?forceFail is a demo-only switch (lib/mode isDemoMode)
     has("app/api/employees/[id]/health/route.ts", /const forceFail =\s*isDemoMode\(\) &&/);

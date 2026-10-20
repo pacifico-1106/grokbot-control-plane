@@ -24,6 +24,7 @@ mock.module("@/lib/auth/route-supabase", () => ({
 
 const { POST } = await import("./route");
 const { resetRateLimitsForTest } = await import("@/lib/auth/auth-flow");
+const { resetPasswordResetTurnstileReplayForTest } = await import("@/lib/auth/password-reset-turnstile");
 const BASE = "https://staffpass.sealith.com";
 const EMAIL = "victim.person@example.co.jp";
 const TOKEN = "pkce_8f3a1b2c3d4e5f60718293a4b5c6d7e8";
@@ -45,6 +46,7 @@ beforeEach(() => {
   resetError = null;
   logged.length = 0;
   resetRateLimitsForTest();
+  resetPasswordResetTurnstileReplayForTest();
   for (const level of ["log", "info", "warn", "error", "debug"] as const) {
     console[level] = (...args: unknown[]) => {
       logged.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));

@@ -2,7 +2,7 @@
  * Ingress handoff application.
  * Applies body and attachment modes to shape wake payload content.
  */
-import { appendAuditEvent } from "@/lib/data/audit";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { extractSealithIntent } from "./resolve";
 import type {
   AttachmentApproval,
@@ -163,7 +163,8 @@ export async function applyIngressHandoff(
     auditNote =
       "attachmentApproval=manager: fail-closed (file bodies not passed pending manager approval implementation)";
 
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ orgId: options.orgId }),
       orgId: options.orgId,
       employeeId: options.employeeId ?? null,
       credentialId: null,
@@ -193,7 +194,8 @@ export async function applyIngressHandoff(
     auditNote =
       "sealith=required but no sealithTransferId: file bodies not passed (fail-closed)";
 
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ orgId: options.orgId }),
       orgId: options.orgId,
       employeeId: options.employeeId ?? null,
       credentialId: null,

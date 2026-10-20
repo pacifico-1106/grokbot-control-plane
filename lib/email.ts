@@ -4,6 +4,7 @@ import {
   trialEndingTemplate,
   trialStartedTemplate,
   welcomeTemplate,
+  type ApprovalMailMeta,
 } from "./email-templates";
 import {
   renderStubHtml,
@@ -18,6 +19,7 @@ export async function sendWelcomeEmail(to: string, orgName: string) {
     subject: t.subject,
     html: t.html,
     tags: [{ name: "template", value: "welcome" }],
+    audience: "unverified",
   });
 }
 
@@ -29,6 +31,7 @@ export async function sendTrialStartedEmail(to: string, trialDays: number) {
     subject: t.subject,
     html: t.html,
     tags: [{ name: "template", value: "trial_started" }],
+    audience: "unverified",
   });
 }
 
@@ -50,9 +53,10 @@ export async function sendTrialEndingEmail(
 export async function sendApprovalNeededEmail(
   to: string,
   summary: string,
-  risk: string
+  risk: string,
+  meta?: ApprovalMailMeta
 ) {
-  const t = approvalNeededTemplate(summary, risk);
+  const t = approvalNeededTemplate(summary, risk, meta);
   return sendTransactionalEmail({
     to,
     template: "approval_needed",
@@ -67,12 +71,13 @@ export async function sendApprovalNotification(
   kind: "approval_requested" | "approval_resolved" | "approval_needed",
   summary: string,
   risk = "medium",
-  statusLabel = "resolved"
+  statusLabel = "resolved",
+  meta?: ApprovalMailMeta
 ) {
   if (kind === "approval_needed" || kind === "approval_requested") {
-    return sendApprovalNeededEmail(to, summary, risk);
+    return sendApprovalNeededEmail(to, summary, risk, meta);
   }
-  const t = approvalResolvedTemplate(summary, statusLabel);
+  const t = approvalResolvedTemplate(summary, statusLabel, meta);
   return sendTransactionalEmail({
     to,
     template: "approval_resolved",

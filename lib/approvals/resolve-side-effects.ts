@@ -97,7 +97,8 @@ export async function runApprovalResolveSideEffects(opts: {
       "approval_resolved",
       `${title}<br/>処理者: ${actorEmail}`,
       approval.risk,
-      statusLabel
+      statusLabel,
+      { kind: approval.tool || approval.purpose, id: approval.id }
     );
   } catch (e) {
     orgEmail = {

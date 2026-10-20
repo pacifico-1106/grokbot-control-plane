@@ -24,7 +24,6 @@ export type AdminAuthFailure = {
     | "missing_credential"
     | "invalid_credential"
     | "employee_badge_rejected"
-    | "revoked"
     | "admin_required";
   message: string;
   httpStatus: number;
@@ -79,14 +78,6 @@ export async function resolveAdminCredential(req: Request): Promise<AdminAuthRes
         code: "invalid_credential",
         message: "admin credential not found or rotated (fail-closed)",
         httpStatus: 401,
-      };
-    }
-    if (agent.status === "revoked") {
-      return {
-        ok: false,
-        code: "revoked",
-        message: "admin credential revoked (fail-closed)",
-        httpStatus: 403,
       };
     }
     return {

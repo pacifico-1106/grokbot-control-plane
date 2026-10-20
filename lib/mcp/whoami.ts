@@ -7,7 +7,43 @@ import {
   accessibleProjects,
   normalizeProjectAccess,
 } from "@/lib/employees/project-access";
+import { credentialExpiry } from "@/lib/employees/credential-expiry";
 import type { Employee, EmployeeBinding, OrgProject } from "@/lib/types";
+
+export type WhoamiCredentialKind = "gb_emp" | "oauth";
+
+export type WhoamiCredentialInfo = {
+  kind: WhoamiCredentialKind;
+  expiresAt: string | null;
+  orgName: string | null;
+  now?: Date;
+};
+
+export function formatWhoamiExpiryDateJa(expiresAt: string): string | null {
+  const ms = Date.parse(expiresAt);
+  if (!Number.isFinite(ms)) return null;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    })
+      .formatToParts(new Date(ms))
+      .map((p) => [p.type, p.value])
+  );
+  const year = parts.year;
+  const month = parts.month;
+  const day = parts.day;
+  if (!year || !month || !day) return null;
+  return `${year}-${month}-${day}`;
+}
+
+export function whoamiExpiringSoonNextStepJa(expiresAt: string): string | null {
+  const ymd = formatWhoamiExpiryDateJa(expiresAt);
+  if (!ymd) return null;
+  return `社員証の期限が近づいています（${ymd} まで）。管理者に再発行を依頼してください。`;
+}
 
 export function buildStaffpassWhoamiPayload(input: {
   employee: Employee;
@@ -37,6 +73,11 @@ export function buildStaffpassWhoamiPayload(input: {
     pendingApply: number | "unknown";
     ruleJa: string;
   } | null;
+  /**
+   * WHOAMI_CREDENTIAL_INFO_ENABLED (flag ON only). Omitted entirely when OFF
+   * so the JSON stays byte-identical to today.
+   */
+  credentialInfo?: WhoamiCredentialInfo | null;
 }): Record<string, unknown> {
   const { employee, orgId, binding } = input;
   const status = binding?.status ?? "unlinked";
@@ -54,7 +95,7 @@ export function buildStaffpassWhoamiPayload(input: {
           isDefault: item.isDefault,
         }))
       : undefined;
-  return {
+  const payload: Record<string, unknown> = {
     ok: true,
     employeeId: employee.id,
     displayName: employee.displayName,
@@ -85,4 +126,22 @@ export function buildStaffpassWhoamiPayload(input: {
           ? "連携済み"
           : "未連携または実行不可",
   };
+  const info = input.credentialInfo;
+  if (!info) return payload;
+  payload.credential = { kind: info.kind, expiresAt: info.expiresAt };
+  payload.org = { name: info.orgName };
+  if (info.expiresAt) {
+    const expiry = credentialExpiry(
+      { credentialId: "whoami", credentialExpiresAt: info.expiresAt },
+      info.now ?? new Date()
+    );
+    if (expiry.state === "expiring" || expiry.state === "expired") {
+      const nextStepJa = whoamiExpiringSoonNextStepJa(info.expiresAt);
+      if (nextStepJa) {
+        payload.expiringSoon = true;
+        payload.nextStepJa = nextStepJa;
+      }
+    }
+  }
+  return payload;
 }

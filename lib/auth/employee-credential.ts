@@ -9,6 +9,12 @@ import {
   getBinding,
   getEmployeeById,
 } from "@/lib/data";
+import { touchCredentialLastUsed } from "@/lib/data/credential-last-used";
+import { demoGetOverlapCredentialByHash } from "@/lib/data/credential-renewals";
+import {
+  completeCredentialOverlapOnFirstAuth,
+  overlapNewCredentialAllowed,
+} from "@/lib/employees/credential-auto-renew-overlap";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import type { EmployeeBinding } from "@/lib/types";
@@ -33,10 +39,17 @@ export type CredentialAuthFailure = {
     | "employee_not_found"
     | "employee_on_hold"
     | "org_on_hold"
-    | "hold_state_unavailable";
+    | "hold_state_unavailable"
+    | "employee_terminated";
   message: string;
   httpStatus: number;
+  /** When resolvable without storing the token or its hash. */
+  orgId?: string;
+  employeeId?: string;
+  credentialId?: string;
 };
+
+type AuthFailureIdentity = Pick<CredentialAuthFailure, "orgId" | "employeeId" | "credentialId">;
 
 export type CredentialAuthSuccess = {
   ok: true;
@@ -61,11 +74,23 @@ function isGbEmpSecret(raw: string): boolean {
   return raw.startsWith("gb_emp_");
 }
 
+function identityFrom(
+  orgId?: string | null,
+  employeeId?: string | null,
+  credentialId?: string | null
+): AuthFailureIdentity {
+  return {
+    ...(orgId ? { orgId } : {}),
+    ...(employeeId ? { employeeId } : {}),
+    ...(credentialId ? { credentialId } : {}),
+  };
+}
+
 async function lookupProdByHash(
   hash: string
 ): Promise<
   | { ok: true; value: ResolvedEmployeeCredential }
-  | { ok: false; code: "invalid_credential" | "revoked" | "expired" }
+  | { ok: false; code: "invalid_credential" | "revoked" | "expired" } & AuthFailureIdentity
 > {
   const admin = createSupabaseAdminClient();
   if (!admin) return { ok: false, code: "invalid_credential" };
@@ -74,7 +99,7 @@ async function lookupProdByHash(
   const byFingerprint = await findBindingByCredentialFingerprint(hash);
   if (byFingerprint) {
     if (byFingerprint.status === "revoked") {
-      return { ok: false, code: "revoked" };
+      return { ok: false, code: "revoked", ...identityFrom(byFingerprint.orgId, byFingerprint.employeeId) };
     }
     const { data: cred } = await admin
       .from("credentials")
@@ -96,7 +121,11 @@ async function lookupProdByHash(
       | null;
 
     if (credRow?.expires_at && Date.parse(credRow.expires_at) < Date.now()) {
-      return { ok: false, code: "expired" };
+      return {
+        ok: false,
+        code: "expired",
+        ...identityFrom(byFingerprint.orgId, byFingerprint.employeeId, credRow.id),
+      };
     }
 
     return {
@@ -135,19 +164,26 @@ async function lookupProdByHash(
   };
 
   if (row.expires_at && Date.parse(row.expires_at) < Date.now()) {
-    return { ok: false, code: "expired" };
+    return { ok: false, code: "expired", ...identityFrom(row.org_id, row.employee_id, row.id) };
   }
 
   const binding = await getBinding(row.employee_id);
   if (binding?.status === "revoked") {
-    return { ok: false, code: "revoked" };
+    return { ok: false, code: "revoked", ...identityFrom(row.org_id, row.employee_id, row.id) };
   }
   if (
     binding?.credentialFingerprint &&
     binding.credentialFingerprint !== hash
   ) {
-    // Rotated away — old secret must not work.
-    return { ok: false, code: "invalid_credential" };
+    const overlapOk = await overlapNewCredentialAllowed({
+      orgId: row.org_id,
+      newCredentialId: row.id,
+      bindingFingerprint: binding.credentialFingerprint,
+    });
+    if (!overlapOk) {
+      // Rotated away — old secret must not work. Ids from the old row (id lookup).
+      return { ok: false, code: "invalid_credential", ...identityFrom(row.org_id, row.employee_id, row.id) };
+    }
   }
 
   return {
@@ -168,22 +204,50 @@ async function lookupDemoByHash(
   hash: string
 ): Promise<
   | { ok: true; value: ResolvedEmployeeCredential }
-  | { ok: false; code: "invalid_credential" | "revoked" }
+  | { ok: false; code: "invalid_credential" | "revoked" | "expired" }
 > {
   const binding = await findBindingByCredentialFingerprint(hash);
-  if (!binding) return { ok: false, code: "invalid_credential" };
-  if (binding.status === "revoked") return { ok: false, code: "revoked" };
-  const employee = await getEmployeeById(binding.employeeId);
+  if (binding) {
+    if (binding.status === "revoked") return { ok: false, code: "revoked" };
+    const employee = await getEmployeeById(binding.employeeId);
+    if (!employee) return { ok: false, code: "invalid_credential" };
+    return {
+      ok: true,
+      value: {
+        employeeId: binding.employeeId,
+        orgId: binding.orgId || employee.orgId,
+        generation: binding.credentialGeneration,
+        credentialId: employee.credentialId,
+        fingerprint: hash,
+        binding,
+        secretPrefix: "gb_emp_",
+      },
+    };
+  }
+  const overlapCred = demoGetOverlapCredentialByHash(hash);
+  if (!overlapCred || overlapCred.revokedAt) return { ok: false, code: "invalid_credential" };
+  if (overlapCred.expiresAt && Date.parse(overlapCred.expiresAt) < Date.now()) {
+    return { ok: false, code: "expired" };
+  }
+  const liveBinding = await getBinding(overlapCred.employeeId);
+  if (liveBinding?.status === "revoked") return { ok: false, code: "revoked" };
+  const overlapOk = await overlapNewCredentialAllowed({
+    orgId: overlapCred.orgId,
+    newCredentialId: overlapCred.id,
+    bindingFingerprint: liveBinding?.credentialFingerprint,
+  });
+  if (!overlapOk) return { ok: false, code: "invalid_credential" };
+  const employee = await getEmployeeById(overlapCred.employeeId);
   if (!employee) return { ok: false, code: "invalid_credential" };
   return {
     ok: true,
     value: {
-      employeeId: binding.employeeId,
-      orgId: binding.orgId || employee.orgId,
-      generation: binding.credentialGeneration,
-      credentialId: employee.credentialId,
+      employeeId: overlapCred.employeeId,
+      orgId: overlapCred.orgId || employee.orgId,
+      generation: liveBinding?.credentialGeneration ?? 0,
+      credentialId: overlapCred.id,
       fingerprint: hash,
-      binding,
+      binding: liveBinding ?? null,
       secretPrefix: "gb_emp_",
     },
   };
@@ -227,11 +291,13 @@ export async function resolveEmployeeCredential(
       expired: "credential expired (fail-closed)",
     };
     const httpStatus = looked.code === "revoked" ? 403 : 401;
+    const failId = looked as AuthFailureIdentity;
     return {
       ok: false,
       code: looked.code,
       message: messages[looked.code] || messages.invalid_credential,
       httpStatus,
+      ...identityFrom(failId.orgId, failId.employeeId, failId.credentialId),
     };
   }
 
@@ -242,6 +308,7 @@ export async function resolveEmployeeCredential(
       code: "revoked",
       message: "credential / binding revoked (fail-closed)",
       httpStatus: 403,
+      ...identityFrom(resolved.orgId, resolved.employeeId, resolved.credentialId),
     };
   }
 
@@ -252,6 +319,7 @@ export async function resolveEmployeeCredential(
       code: "employee_not_found",
       message: "employee not found or suspended (fail-closed)",
       httpStatus: 401,
+      ...identityFrom(resolved.orgId, resolved.employeeId, resolved.credentialId),
     };
   }
 
@@ -260,11 +328,22 @@ export async function resolveEmployeeCredential(
   const operable = await checkOperable({ orgId: resolved.orgId || employee.orgId, employeeId: resolved.employeeId, phase: "credential" });
   if (!operable.ok) return holdRefusal(operable.code);
 
+  void touchCredentialLastUsed(resolved.credentialId);
+  await completeCredentialOverlapOnFirstAuth({
+    orgId: resolved.orgId,
+    employeeId: resolved.employeeId,
+    credentialId: resolved.credentialId,
+    fingerprint: resolved.fingerprint,
+  }).catch(() => undefined);
   return { ok: true, credential: resolved };
 }
 
 export function holdRefusal(code: HoldDenyCode): CredentialAuthFailure {
-  return code === "hold_state_unavailable"
-    ? { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503 }
-    : { ok: false, code, message: code === "org_on_hold" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
+  if (code === "hold_state_unavailable") {
+    return { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503 };
+  }
+  if (code === "employee_terminated") {
+    return { ok: false, code, message: "employee is retired (contract ended)", httpStatus: 403 };
+  }
+  return { ok: false, code, message: code === "org_on_hold" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
 }

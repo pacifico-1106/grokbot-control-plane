@@ -155,6 +155,7 @@ export {
   getOrgAdminAgent,
   findAdminAgentByFingerprint,
   issueOrgAdminAgent,
+  revokeOrgAdminAgent,
   linkOrgAdminAgent,
   setOrgAdminOpsDocLocation,
   adminAgentPublicView,

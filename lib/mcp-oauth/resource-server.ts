@@ -23,6 +23,7 @@ import {
 } from "@/lib/mcp-oauth/config";
 import { getCurrentEmployeeCredential } from "@/lib/mcp-oauth/employee-state";
 import { sha256Hex } from "@/lib/mcp-oauth/tokens";
+import { touchCredentialLastUsed } from "@/lib/data/credential-last-used";
 
 export type McpAuthMethod = "gb_emp" | "oauth";
 
@@ -69,7 +70,7 @@ function shouldTouch(grantId: string, nowMs: number): boolean {
 const holdRefusal = (code: HoldDenyCode): McpAuthResult =>
   code === "hold_state_unavailable"
     ? { ok: false, code, message: "hold state unavailable; refused (fail-stop)", httpStatus: 503 }
-    : { ok: false, code, message: code === "org_on_hold" ? "organization is on emergency stop" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
+    : { ok: false, code, message: code === "org_on_hold" ? "organization is on emergency stop" : code === "employee_terminated" ? "employee is retired (contract ended)" : "employee is on hold (emergency stop / leave)", httpStatus: 403 };
 
 const invalid = (message: string): McpAuthResult => ({
   ok: false,
@@ -120,12 +121,22 @@ export async function resolveOAuthAccessToken(raw: string, now = new Date()): Pr
   const current = await getCurrentEmployeeCredential(grant.employeeId);
   if (!current) return invalid("employee has no active credential (fail-closed)");
   if (current.expiresAt && Date.parse(current.expiresAt) <= now.getTime()) {
-    return { ok: false, code: "expired", message: "employee credential expired (fail-closed)", httpStatus: 401, oauthError: "invalid_token" };
+    return {
+      ok: false,
+      code: "expired",
+      message: "employee credential expired (fail-closed)",
+      httpStatus: 401,
+      oauthError: "invalid_token",
+      orgId: grant.orgId,
+      employeeId: grant.employeeId,
+      credentialId: current.credentialId,
+    };
   }
 
   if (shouldTouch(grant.id, now.getTime())) {
     void store.touchGrant(grant.id, nowIso).catch(() => undefined);
   }
+  void touchCredentialLastUsed(current.credentialId);
 
   return {
     ok: true,

@@ -4,9 +4,10 @@
  */
 
 import { createSupabaseAdminClient } from "@/lib/supabase";
-import { isLpInquiryDbEnabled } from "@/lib/feature-flags";
+import { isLpInquiryDbEnabled, isLpInquiryFixedSubjectEnabled } from "@/lib/feature-flags";
 import { sendTransactionalEmail, renderStubHtml } from "@/lib/resend";
 import { lpPageLabel, parseLpPage, parseLpRef } from "@/lib/lp/lp-page";
+import { buildInquiryNotify } from "@/lib/lp/inquiry-mail";
 
 export type NotificationType = 
   | "inquiry_received" 
@@ -262,6 +263,26 @@ function renderInquiryHtml(payload: Record<string, unknown>): string {
   const billing = payload.billingPreference === "annual" ? "年払い（10%オフ）" : "月払い";
   const useCase = String(payload.useCase || "");
   const inquiryId = String(payload.inquiryId || "");
+
+  if (isLpInquiryFixedSubjectEnabled()) {
+    return buildInquiryNotify({
+      timestamp,
+      inquiryId: inquiryId || null,
+      planLabel: getPlanLabel(plan),
+      company,
+      name,
+      email,
+      phone,
+      headcount,
+      billingLabel: billing,
+      lpPageLabel: (() => {
+        const page = parseLpPage(payload.lpPage);
+        return page ? lpPageLabel(page) : "";
+      })(),
+      lpRef: parseLpRef(payload.lpRef),
+      useCase,
+    }).html;
+  }
 
   return `
     <h2>AI社員パック お問い合わせ</h2>
