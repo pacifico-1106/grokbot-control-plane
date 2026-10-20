@@ -1,7 +1,8 @@
 /**
  * 社員証 auto-renew R3: issueCredentialOverlap + first-auth switchover + 24h cron.
  * Behind CREDENTIAL_AUTO_RENEW_ENABLED + org allowlist (default OFF).
- * Does not add gen1 HTTP (R8) or a boot script (R5). Never logs secret / claim_token.
+ * gen1 HTTP claim (R8) is a separate flag + route. No boot script (R5).
+ * Never logs secret / claim_token.
  */
 import { randomBytes } from "node:crypto";
 import { mintOneTimeSecret } from "@/lib/bindings";
@@ -9,6 +10,7 @@ import { appendAuditEvent } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import {
   claimCredentialRenewal,
+  claimCredentialRenewalGen1Http,
   completeOverlappedCredentialSwitchover,
   demoGetOverlapCredential,
   findClaimedOverlapByNewCredential,
@@ -69,6 +71,7 @@ export async function issueCredentialOverlap(input: {
   orgId: string;
   employeeId: string;
   oldCredentialId: string;
+  claimMode?: "gen1_http";
 }): Promise<IssueCredentialOverlapResult> {
   if (!isCredentialAutoRenewOnForOrg(input.orgId)) {
     return fail("feature_disabled", "社員証の自動更新は無効です（CREDENTIAL_AUTO_RENEW_ENABLED / 許可リスト）。");
@@ -110,7 +113,8 @@ export async function issueCredentialOverlap(input: {
   const at = new Date().toISOString();
   let claimed = false;
   try {
-    claimed = await claimCredentialRenewal({
+    const claim = input.claimMode === "gen1_http" ? claimCredentialRenewalGen1Http : claimCredentialRenewal;
+    claimed = await claim({
       id: open.id,
       orgId: input.orgId,
       employeeId: gated.employee.id,
@@ -167,7 +171,7 @@ export async function issueCredentialOverlap(input: {
         generation: minted.generation,
         newCredentialId: minted.newCredentialId,
         oldCredentialId: input.oldCredentialId,
-        mode: open.mode,
+        mode: input.claimMode ?? open.mode,
         secretHashPrefix: secret.fingerprint.slice(0, 12),
         overlapUntil,
       },

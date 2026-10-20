@@ -425,6 +425,39 @@ export async function claimCredentialRenewal(input: {
   return data === true;
 }
 
+/** R8: same CAS as claim, plus pin mode=gen1_http. */
+export async function claimCredentialRenewalGen1Http(input: {
+  id: string;
+  orgId: string;
+  employeeId: string;
+  token: string;
+  at: string;
+}): Promise<boolean> {
+  if (!input.token || input.token.length < 16) throw new Error("invalid_claim_token");
+  if (isDemoMode()) {
+    const row = demoRows.get(input.id);
+    if (!row || row.orgId !== input.orgId || row.employeeId !== input.employeeId) return false;
+    if (row.state !== "claimable" || row.claimedAt || demoClaimTokens.has(row.id)) return false;
+    if (row.mode !== "gen2" && row.mode !== "gen1_http") return false;
+    const until = row.claimableUntil ? Date.parse(row.claimableUntil) : NaN;
+    if (!Number.isFinite(until) || until < Date.now()) return false;
+    demoClaimTokens.set(row.id, input.token);
+    demoRows.set(row.id, { ...row, state: "claimed", claimedAt: input.at, mode: "gen1_http" });
+    return true;
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return false;
+  const { data, error } = await admin.rpc("claim_credential_renewal_gen1_http", {
+    p_id: input.id,
+    p_org: input.orgId,
+    p_employee: input.employeeId,
+    p_token: input.token,
+    p_at: input.at,
+  });
+  if (error) return rpcFailed(error);
+  return data === true;
+}
+
 export async function releaseCredentialRenewal(input: {
   id: string;
   orgId: string;

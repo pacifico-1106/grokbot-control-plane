@@ -876,6 +876,59 @@ try:
           "timeout revoke works while held; other org / old=new / before window false; "
           "false revoke does not mark old dead; anon/authenticated cannot execute; "
           "re-applicable; rollback drops 2 functions and keeps 20261019100000; forward again.")
+    # 社員証 auto-renew R8 gen1 HTTP claim (20261020200000).
+    carg1 = ROOT / "supabase/migrations/20261020200000_credential_auto_renew_gen1_http.sql"
+    sql(carg1)
+    sql(carg1)  # re-applicable
+    sql(ROOT / "tests/security/db-credential-auto-renew-gen1.sql")
+    from concurrent.futures import ThreadPoolExecutor as _CarG1Pool
+    g1_org, g1_emp, g1_old, g1_appr, g1_row = (
+        "cc000000-0000-4000-8000-0000000000c1",
+        "cc100000-0000-4000-8000-0000000000c1",
+        "cc200000-0000-4000-8000-0000000000c1",
+        "cc300000-0000-4000-8000-0000000000c1",
+        "cc400000-0000-4000-8000-0000000000c1",
+    )
+    query(
+        f"insert into public.orgs(id, name) values ('{g1_org}', 'car g1 concurrent');"
+        f"insert into public.employees(id, org_id, display_name, role_label) values "
+        f"('{g1_emp}', '{g1_org}', 'Car G1 C', 'fixture');"
+        f"insert into public.credentials(id, org_id, employee_id, secret_hash) values "
+        f"('{g1_old}', '{g1_org}', '{g1_emp}', repeat('g', 64));"
+        f"insert into public.approval_requests(id, org_id, purpose, summary, tool, risk, status, metadata) values "
+        f"('{g1_appr}', '{g1_org}', 'admin.policy', 'car g1', 'employees.credential.auto_renew', 'high', 'approved',"
+        f" '{{\"adminTool\":\"employees.credential.auto_renew\"}}');"
+        f"insert into public.credential_renewals(id, org_id, employee_id, old_credential_id, approval_id, threshold, state, mode, claimable_until) values "
+        f"('{g1_row}', '{g1_org}', '{g1_emp}', '{g1_old}', '{g1_appr}', 'now', 'claimable', 'gen2', now() + interval '24 hours');"
+    )
+    g1_commands = [
+        f"set role service_role; select public.claim_credential_renewal_gen1_http('{g1_row}','{g1_org}','{g1_emp}','tok_g1_conc_{i:02d}_0123456789',now());"
+        for i in range(12)
+    ]
+    with _CarG1Pool(max_workers=12) as pool:
+        g1_claims = list(pool.map(query, g1_commands))
+    assert g1_claims.count("t") == 1 and g1_claims.count("f") == 11, g1_claims
+    g1_winner = query(f"select claim_token || '|' || mode from public.credential_renewals where id = '{g1_row}';")
+    assert g1_winner == f"tok_g1_conc_{g1_claims.index('t'):02d}_0123456789|gen1_http", (g1_winner, g1_claims)
+    query(
+        f"delete from public.credential_renewals where id = '{g1_row}';"
+        f"delete from public.approval_requests where id = '{g1_appr}';"
+        f"delete from public.credentials where id = '{g1_old}';"
+        f"delete from public.employees where id = '{g1_emp}';"
+        f"delete from public.orgs where id = '{g1_org}';"
+    )
+    sql(ROOT / "supabase/verification/20261020200000_credential_auto_renew_gen1_http_rollback.sql")
+    assert query(
+        "select to_regprocedure('public.claim_credential_renewal_gen1_http(uuid,uuid,uuid,text,timestamptz)') is null"
+        " and to_regprocedure('public.claim_credential_renewal(uuid,uuid,uuid,text,timestamptz)') is not null"
+        " and to_regclass('public.credential_renewals') is not null;"
+    ) == "t"
+    sql(carg1)  # forward again after rollback
+    sql(ROOT / "tests/security/db-credential-auto-renew-gen1.sql")
+    print("PASS: credential auto-renew gen1 HTTP (20261020200000): claim once (12 concurrent → 1 winner) "
+          "and pin mode=gen1_http; pending / expired / other org / hold refused; "
+          "anon/authenticated cannot execute; no secret columns; "
+          "re-applicable; rollback drops 1 function and keeps 20261019100000+20261020100000; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")

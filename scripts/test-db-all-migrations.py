@@ -164,6 +164,10 @@ ADDITIVE = [
      "to_regclass('public.mcp_auth_failures') is null"
      " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is null"
      " and to_regprocedure('public.touch_credential_last_used(uuid)') is null"),
+    # R8 child first: roll back gen1 claim RPC before R3/R1.
+    ("20261020200000_", "tests/security/db-credential-auto-renew-gen1.sql",
+     "to_regprocedure('public.claim_credential_renewal_gen1_http(uuid,uuid,uuid,text,timestamptz)') is null"
+     " and to_regprocedure('public.claim_credential_renewal(uuid,uuid,uuid,text,timestamptz)') is not null"),
     # R3 child first: roll back overlap RPCs before R1 drops credential_renewals.
     ("20261020100000_", "tests/security/db-credential-auto-renew-overlap.sql",
      "to_regprocedure('public.attach_overlapped_new_credential(uuid,uuid,text,uuid,timestamptz)') is null"

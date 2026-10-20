@@ -200,8 +200,12 @@ describe("R1 types / constants (no secrets, no tenant hardcode)", () => {
       "lib/employees/credential-auto-renew.test.ts",
       "supabase/migrations/20261019100000_credential_auto_renew.sql",
       "supabase/migrations/20261020100000_credential_auto_renew_overlap.sql",
+      "supabase/migrations/20261020200000_credential_auto_renew_gen1_http.sql",
       "supabase/verification/20261019100000_credential_auto_renew_rollback.sql",
       "supabase/verification/20261020100000_credential_auto_renew_overlap_rollback.sql",
+      "supabase/verification/20261020200000_credential_auto_renew_gen1_http_rollback.sql",
+      "lib/employees/credential-auto-renew-gen1.ts",
+      "app/api/mcp/employee/credential/claim/route.ts",
       "tests/security/db-credential-auto-renew.sql",
       "tests/security/db-credential-auto-renew-overlap.sql",
     ];
@@ -221,7 +225,9 @@ describe("R1 types / constants (no secrets, no tenant hardcode)", () => {
     expect(example).toContain("CREDENTIAL_AUTO_RENEW_ENABLED");
     expect(example).toContain("CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST");
     expect(example).toContain("CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST_REQUIRED");
+    expect(example).toContain("CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED");
     expect(example).not.toMatch(/^CREDENTIAL_AUTO_RENEW_ENABLED=(true|1|on)/m);
+    expect(example).not.toMatch(/^CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED=(true|1|on)/m);
     expect(example).not.toContain(SPACE_TREE);
   });
 

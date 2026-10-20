@@ -1,7 +1,7 @@
 /**
  * Fail-first: 社員証 auto-renew R3 (重ね置き + 初回成功で旧失効 + 24h cron).
  * CREDENTIAL_AUTO_RENEW_ENABLED + org allowlist, default OFF.
- * No gen1 HTTP (R8), no boot script (R5).
+ * gen1 HTTP (R8) is a separate flag + route. No boot script (R5).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -553,11 +553,12 @@ describe("rotate stays immediate; R8/R5 stay out", () => {
     expect(sql).not.toMatch(/disable trigger employee_holds_guard/);
   });
 
-  test("R8 HTTP claim route and R5 boot script are not in this PR", () => {
-    expect(existsSync(resolve("app/api/mcp/employee/credential/claim/route.ts"))).toBe(false);
+  test("R8 HTTP claim route is flag-off by default; R5 boot script stays out", () => {
+    expect(existsSync(resolve("app/api/mcp/employee/credential/claim/route.ts"))).toBe(true);
     expect(existsSync(resolve("scripts/staffpass-mcp-boot.sh"))).toBe(false);
     expect(STAFFPASS_MCP_TOOLS.some((t) => t.name.startsWith("staffpass_credential_renew"))).toBe(false);
     const flags = readFileSync(resolve(".env.example"), "utf8");
+    expect(flags).toContain("CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED");
     expect(flags).not.toMatch(/^CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED=(true|1|on)/m);
   });
 
