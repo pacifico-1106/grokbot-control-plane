@@ -61,4 +61,23 @@ describe("login Turnstile widget gating", () => {
     expect(html).not.toContain("cf-turnstile");
     expect(html).not.toContain("challenges.cloudflare.com");
   });
+
+  test("flag ON: only one user-facing widget (login forwards a single unused token)", async () => {
+    process.env[FLAG] = "true";
+    process.env[SITE] = "1x00000000000000000000AA";
+    const html = await render();
+    expect(html).toContain("cf-turnstile");
+    expect(html).not.toContain("cf-turnstile-supabase");
+    expect(html).not.toContain("interaction-only");
+    const userFacing = html.match(/class="cf-turnstile"/g) ?? [];
+    expect(userFacing).toHaveLength(1);
+  });
+
+  test("submit button is disabled and labeled while sending", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../../components/LoginForm.tsx", import.meta.url), "utf8");
+    expect(src).toMatch(/disabled=\{busy\}/);
+    expect(src).toMatch(/サインイン中/);
+    expect(src).toMatch(/beginAuthSubmit|busyRef|if \(busy\) return/);
+  });
 });

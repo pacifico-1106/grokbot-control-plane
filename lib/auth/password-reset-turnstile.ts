@@ -14,6 +14,9 @@ import type { TurnstileVerifyResult } from "@/lib/lp/turnstile";
 
 export const PASSWORD_RESET_TURNSTILE_ACTION = "password_reset";
 export const PASSWORD_RESET_TURNSTILE_DEFAULT_HOSTNAME = "staffpass.sealith.com";
+/** Same copy for every address — never reveal whether the mailbox exists. */
+export const PASSWORD_RESET_SENT_MESSAGE =
+  "入力したメールアドレスが登録されている場合、パスワード再設定のメールを送りました。";
 
 /** Separate IP brake for CAPTCHA / siteverify attempts (not the send quota). */
 export const PASSWORD_RESET_CAPTCHA_IP_LIMIT = 10;

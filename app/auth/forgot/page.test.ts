@@ -1,5 +1,7 @@
 /**
  * Forgot-password page: Turnstile widget only when PASSWORD_RESET_TURNSTILE_ENABLED is ON.
+ * When SUPABASE_AUTH_CAPTCHA_ENABLED is also ON, the unused token is minted
+ * via execute-mode so the visitor only sees one widget.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { createElement, type ReactNode } from "react";
@@ -71,7 +73,7 @@ describe("forgot-password Turnstile widget gating", () => {
     expect(html).not.toContain("cf-turnstile-supabase");
   });
 
-  test("both flags ON: local widget plus dedicated supabase field", async () => {
+  test("both flags ON: one user-facing widget; supabase token is execute-mode", async () => {
     process.env[FLAG] = "true";
     process.env[SB_FLAG] = "true";
     process.env[SITE] = "1x00000000000000000000AA";
@@ -80,6 +82,37 @@ describe("forgot-password Turnstile widget gating", () => {
     expect(html).toContain("password_reset");
     expect(html).toContain("cf-turnstile-supabase");
     expect(html).toContain("supabase_auth");
+    expect(html).toContain('data-execution="execute"');
+    expect(html).toContain('data-appearance="execute"');
+    expect(html).not.toContain("interaction-only");
+    const userFacing = html.match(/class="cf-turnstile"/g) ?? [];
+    expect(userFacing).toHaveLength(1);
+  });
+
+  test("sent=1 hides the form and uses the same completion copy for every address", async () => {
+    const html = await render({ sent: "1" });
+    expect(html).toContain(
+      "入力したメールアドレスが登録されている場合、パスワード再設定のメールを送りました。"
+    );
+    expect(html).not.toContain("再設定メールを送信");
+    expect(html).not.toContain('name="email"');
+    expect(html).not.toContain("登録されていません");
+    expect(html).not.toContain("アカウントがありません");
+  });
+
+  test("submit button is disabled and labeled while sending", async () => {
+    const src = await import("node:fs").then((fs) =>
+      fs.readFileSync(new URL("./page.tsx", import.meta.url), "utf8")
+    );
+    const formSrc = await import("node:fs").then((fs) => {
+      try {
+        return fs.readFileSync(new URL("../../../components/ForgotPasswordForm.tsx", import.meta.url), "utf8");
+      } catch {
+        return src;
+      }
+    });
+    expect(formSrc).toMatch(/disabled=\{busy\}/);
+    expect(formSrc).toMatch(/送信中/);
   });
 
   test("turnstile_required / turnstile_failed show captcha copy, not an account oracle", async () => {

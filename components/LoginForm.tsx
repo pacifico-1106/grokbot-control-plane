@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
-import Script from "next/script";
+import { useRef, useState, type FormEvent } from "react";
+import { AuthTurnstileFields } from "@/components/AuthTurnstileFields";
+import { authSubmitView, beginAuthSubmit, endAuthSubmit } from "@/lib/auth/auth-submit";
+import { type AuthTurnstilePair } from "@/lib/auth/auth-turnstile-client";
 import {
   SESSION_REQUIRED_MESSAGE,
   loginErrorMessage,
 } from "@/lib/auth/login-errors";
-
-const TURNSTILE_SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js";
 
 export function LoginForm({
   next,
@@ -30,29 +30,33 @@ export function LoginForm({
     initialError ? loginErrorMessage(initialError) : ""
   );
   const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
+  const pairRef = useRef<AuthTurnstilePair | null>(null);
+  const button = authSubmitView(busy, demo ? "デモでダッシュボードへ" : "ログイン", "サインイン中…");
 
   function showFailure(code?: string | null, status?: number) {
     setPassword("");
     setError(loginErrorMessage(code, status));
   }
 
-  function resetTurnstile() {
-    const turnstile = (window as Window & { turnstile?: { reset: () => void } }).turnstile;
-    try {
-      turnstile?.reset();
-    } catch {
-      // Widget may already be gone; the next render gets a fresh token.
-    }
-  }
-
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!beginAuthSubmit(lock)) return;
     setBusy(true);
     setError("");
+    let navigating = false;
     try {
-      const turnstileToken = turnstileSiteKey
-        ? String(new FormData(event.currentTarget).get("cf-turnstile-response") || "")
-        : undefined;
+      let turnstileToken: string | undefined;
+      if (turnstileSiteKey) {
+        const tokens = await (pairRef.current?.collectTokens() ??
+          Promise.resolve({ ok: false as const, error: "turnstile_failed" as const }));
+        if (!tokens.ok) {
+          showFailure(tokens.error);
+          pairRef.current?.reset();
+          return;
+        }
+        turnstileToken = tokens.localToken;
+      }
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: {
@@ -68,6 +72,7 @@ export function LoginForm({
       });
 
       if (response.redirected) {
+        navigating = true;
         window.location.assign(response.url);
         return;
       }
@@ -75,10 +80,11 @@ export function LoginForm({
       const contentType = response.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) {
         if (response.ok) {
+          navigating = true;
           window.location.assign(next || "/app");
           return;
         }
-        resetTurnstile();
+        pairRef.current?.reset();
         showFailure(response.status === 429 ? "rate_limited" : "login_failed", response.status);
         return;
       }
@@ -91,17 +97,21 @@ export function LoginForm({
       };
 
       if (!response.ok || body.error) {
-        resetTurnstile();
+        pairRef.current?.reset();
         showFailure(body.error, response.status);
         return;
       }
 
+      navigating = true;
       window.location.assign(body.next || next || "/app");
     } catch {
-      resetTurnstile();
+      pairRef.current?.reset();
       showFailure("login_failed");
     } finally {
-      setBusy(false);
+      if (!navigating) {
+        endAuthSubmit(lock);
+        setBusy(false);
+      }
     }
   }
 
@@ -158,18 +168,15 @@ export function LoginForm({
           />
         </label>
         {turnstileSiteKey ? (
-          <>
-            <Script src={TURNSTILE_SCRIPT_SRC} strategy="afterInteractive" />
-            <div
-              className="cf-turnstile"
-              data-sitekey={turnstileSiteKey}
-              data-action="login"
-              data-language="ja"
-            />
-          </>
+          <AuthTurnstileFields
+            siteKey={turnstileSiteKey}
+            localAction="login"
+            needUnusedSupabase={false}
+            pairRef={pairRef}
+          />
         ) : null}
-        <button type="submit" className="btn btn-primary w-full" disabled={busy}>
-          {busy ? "サインイン中…" : demo ? "デモでダッシュボードへ" : "ログイン"}
+        <button type="submit" className="btn btn-primary w-full" disabled={busy} aria-busy={button.ariaBusy}>
+          {button.label}
         </button>
       </form>
     </>
