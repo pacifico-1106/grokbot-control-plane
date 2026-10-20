@@ -22,8 +22,14 @@ export const PINNED: Record<string, string[]> = {
   "postWake(": ["lib/slack/mention-ingress.ts"],
   // G5 inside (checkOperable phase:"wake"). Ingress already checked; wake re-checks.
   "dispatchLineConversationWake(": ["lib/comm/line-ingress.ts"],
-  // G1 inside.
-  "resolveEmployeeCredential(": ["app/api/gateway/invoke/route.ts", "lib/mcp/employee-http.ts", "lib/mcp-oauth/resource-server.ts"],
+  // G1 inside (employee-credential.ts checkOperable phase:"credential"). R8 claim
+  // converts hold / auth failure to the same 404; it does not lift a hold.
+  "resolveEmployeeCredential(": [
+    "app/api/gateway/invoke/route.ts",
+    "app/api/mcp/employee/credential/claim/route.ts",
+    "lib/mcp/employee-http.ts",
+    "lib/mcp-oauth/resource-server.ts",
+  ],
   // G2 inside (resolveOAuthAccessToken).
   "resolveMcpCredential(": ["lib/mcp/employee-http.ts"],
   "resolveOAuthAccessToken(": ["lib/mcp-oauth/resource-server.ts"],

@@ -213,11 +213,16 @@ begin
 end $$;
 
 -- cleanup
+reset role;
+do $$
+begin
+  perform set_config('staffpass.hold_write', 'on', true);
+  update public.employees set hold_state = null, hold_id = null where id::text like 'cc100000-%';
+  update public.orgs set hold_state = null, hold_id = null where id::text like 'cc000000-%';
+end $$;
 delete from public.credential_renewals where id::text like 'cc400000-%';
 delete from public.approval_requests where id::text like 'cc300000-%';
 delete from public.credentials where id::text like 'cc200000-%';
 delete from public.employees where id::text like 'cc100000-%';
 delete from public.orgs where id::text like 'cc000000-%';
-
 drop function if exists security_test.car_g1_denied(text);
-reset role;
