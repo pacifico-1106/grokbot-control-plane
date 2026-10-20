@@ -1039,6 +1039,30 @@ export function isSupabaseAuthCaptchaEnabled(): boolean {
   return parseFlag(process.env.SUPABASE_AUTH_CAPTCHA_ENABLED);
 }
 
+/**
+ * AUTH_ENUMERATION_HARDENING_ENABLED (default OFF): stop public auth
+ * responses from revealing whether a mailbox is registered, and stop
+ * burning another person's password-reset send quota with a failed
+ * GoTrue call (fake unused captcha token → captcha_failed).
+ *
+ * When ON:
+ * - POST /api/auth/forgot-password peeks the send quotas (IP 5/15m,
+ *   email 3/1h) without consuming, then consumes only after GoTrue
+ *   succeeds. captcha_failed and other resetPasswordForEmail errors
+ *   do not consume. Responses stay 303 /auth/forgot?sent=1 except
+ *   captcha_failed → turnstile_failed (same as main).
+ * - Signup anti-enumeration (same status / destination / copy as a
+ *   new signup) is deferred: current signup still signInWithPassword
+ *   and lands on /app, so an existing mailbox cannot share that
+ *   response without a session. See the PR for the options.
+ *
+ * When OFF (default): today's consume-before-send and 409 email_exists
+ * / duplicate_normalized copy are unchanged.
+ */
+export function isAuthEnumerationHardeningEnabled(): boolean {
+  return parseFlag(process.env.AUTH_ENUMERATION_HARDENING_ENABLED);
+}
+
 const DEFAULT_AI_PEER_WAKE_CAP = 4;
 const DEFAULT_AI_PEER_WAKE_ROOT_WINDOW_SECONDS = 30 * 60;
 

@@ -155,6 +155,37 @@ export function takeRateLimit(
   return true;
 }
 
+/** True if takeRateLimit would succeed. Does not increment or evict. */
+export function peekRateLimit(
+  key: string,
+  limit: number,
+  windowMs: number,
+  now: number = Date.now()
+): boolean {
+  const b = buckets.get(key);
+  if (!b || b.resetAt <= now) {
+    if (buckets.size >= maxBuckets) {
+      for (const [, v] of buckets) {
+        if (v.resetAt <= now) return true;
+      }
+      return false;
+    }
+    return true;
+  }
+  return b.count < limit;
+}
+
+/** Undo one takeRateLimit increment in the current window (no-op if expired). */
+export function releaseRateLimit(key: string, now: number = Date.now()): void {
+  const b = buckets.get(key);
+  if (!b || b.resetAt <= now) return;
+  if (b.count <= 1) {
+    buckets.delete(key);
+    return;
+  }
+  b.count--;
+}
+
 export function resetRateLimitsForTest(): void {
   buckets.clear();
 }

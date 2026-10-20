@@ -6,7 +6,9 @@ import {
   clientIp,
   isPlausibleEmail,
   isSameOriginRequest,
+  peekRateLimit,
   rateKey,
+  releaseRateLimit,
   takeRateLimit,
 } from "@/lib/auth/auth-flow";
 import {
@@ -15,7 +17,11 @@ import {
   PASSWORD_RESET_CAPTCHA_IP_LIMIT,
   PASSWORD_RESET_CAPTCHA_IP_WINDOW_MS,
 } from "@/lib/auth/password-reset-turnstile";
-import { isPasswordResetTurnstileEnabled, isSupabaseAuthCaptchaEnabled } from "@/lib/feature-flags";
+import {
+  isAuthEnumerationHardeningEnabled,
+  isPasswordResetTurnstileEnabled,
+  isSupabaseAuthCaptchaEnabled,
+} from "@/lib/feature-flags";
 import {
   evaluateSupabaseAuthCaptcha,
   isGoTrueCaptchaFailed,
@@ -48,6 +54,11 @@ function safeErrorId(value: unknown): string | null {
  * When either flag is ON, CAPTCHA runs after the email-format check and before
  * the send quotas (`forgot:ip:*` / `forgot:email:*`). CAPTCHA failures use a
  * separate IP brake and never fall through to sent=1.
+ *
+ * AUTH_ENUMERATION_HARDENING_ENABLED (default OFF): peek those send quotas
+ * (no consume), then reserve atomically and keep the reservation only when
+ * resetPasswordForEmail succeeds. captcha_failed and other GoTrue errors
+ * release the reservation. Flag OFF keeps consume-before-send.
  */
 export async function POST(req: Request) {
   if (!isSameOriginRequest(req.headers, req.url)) {
@@ -111,16 +122,46 @@ export async function POST(req: Request) {
     }
   }
 
-  const ipOk = takeRateLimit(`forgot:ip:${rateKey(clientIp(req.headers))}`, 5, 15 * 60_000);
-  const emailOk = takeRateLimit(`forgot:email:${rateKey(email)}`, 3, 60 * 60_000);
-  if (!ipOk) {
-    return NextResponse.redirect(new URL("/auth/forgot?error=rate_limited", req.url), 303);
+  const ipKey = `forgot:ip:${rateKey(clientIp(req.headers))}`;
+  const emailKey = `forgot:email:${rateKey(email)}`;
+  const hardening = isAuthEnumerationHardeningEnabled();
+  let reservedIp = false;
+  let reservedEmail = false;
+
+  if (hardening) {
+    if (!peekRateLimit(ipKey, 5, 15 * 60_000)) {
+      return NextResponse.redirect(new URL("/auth/forgot?error=rate_limited", req.url), 303);
+    }
+    // Per-email limit is silent (same response) so it can't be used as an oracle.
+    if (!peekRateLimit(emailKey, 3, 60 * 60_000) || isDemoMode()) return done;
+    reservedIp = takeRateLimit(ipKey, 5, 15 * 60_000);
+    reservedEmail = takeRateLimit(emailKey, 3, 60 * 60_000);
+    if (!reservedIp) {
+      if (reservedEmail) releaseRateLimit(emailKey);
+      return NextResponse.redirect(new URL("/auth/forgot?error=rate_limited", req.url), 303);
+    }
+    if (!reservedEmail) {
+      releaseRateLimit(ipKey);
+      return done;
+    }
+  } else {
+    const ipOk = takeRateLimit(ipKey, 5, 15 * 60_000);
+    const emailOk = takeRateLimit(emailKey, 3, 60 * 60_000);
+    if (!ipOk) {
+      return NextResponse.redirect(new URL("/auth/forgot?error=rate_limited", req.url), 303);
+    }
+    // Per-email limit is silent (same response) so it can't be used as an oracle.
+    if (!emailOk || isDemoMode()) return done;
   }
-  // Per-email limit is silent (same response) so it can't be used as an oracle.
-  if (!emailOk || isDemoMode()) return done;
 
   const supabase = await createRouteSupabase();
-  if (!supabase) return done;
+  if (!supabase) {
+    if (hardening) {
+      if (reservedIp) releaseRateLimit(ipKey);
+      if (reservedEmail) releaseRateLimit(emailKey);
+    }
+    return done;
+  }
 
   // PKCE client: with the token_hash Reset Password template the link is
   // /auth/confirm?token_hash=…&type=recovery; with the default template it is
@@ -130,6 +171,10 @@ export async function POST(req: Request) {
     passwordResetEmailOptions(authConfirmUrl(), supabaseCaptcha.captchaToken)
   );
   if (error) {
+    if (hardening) {
+      if (reservedIp) releaseRateLimit(ipKey);
+      if (reservedEmail) releaseRateLimit(emailKey);
+    }
     // Ids only: never the email, token, link or error.message (which can echo them).
     console.warn("[auth] resetPasswordForEmail failed", {
       status: typeof error.status === "number" ? error.status : null,

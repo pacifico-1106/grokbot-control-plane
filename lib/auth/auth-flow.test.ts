@@ -9,6 +9,8 @@ import {
   renderConfirmInterstitial,
   resetRateLimitsForTest,
   setMaxBucketsForTest,
+  peekRateLimit,
+  releaseRateLimit,
   takeRateLimit,
   validateNewPassword,
 } from "./auth-flow";
@@ -105,6 +107,18 @@ describe("rate limit", () => {
     } finally {
       setMaxBucketsForTest(null);
     }
+  });
+
+  test("peek does not consume; release undoes a take in the same window", () => {
+    expect(peekRateLimit("k", 2, 1000, 0)).toBe(true);
+    expect(takeRateLimit("k", 2, 1000, 0)).toBe(true);
+    expect(peekRateLimit("k", 2, 1000, 1)).toBe(true);
+    expect(takeRateLimit("k", 2, 1000, 1)).toBe(true);
+    expect(peekRateLimit("k", 2, 1000, 2)).toBe(false);
+    releaseRateLimit("k", 2);
+    expect(peekRateLimit("k", 2, 1000, 2)).toBe(true);
+    expect(takeRateLimit("k", 2, 1000, 2)).toBe(true);
+    expect(peekRateLimit("k", 2, 1000, 2)).toBe(false);
   });
 });
 
