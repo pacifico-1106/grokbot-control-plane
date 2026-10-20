@@ -3,7 +3,13 @@
  * while a request is in flight.
  */
 import { describe, expect, test } from "bun:test";
-import { authSubmitView, beginAuthSubmit, endAuthSubmit } from "./auth-submit";
+import {
+  authSubmitStillMounted,
+  authSubmitView,
+  beginAuthSubmit,
+  endAuthSubmit,
+  finishNativeAuthSubmit,
+} from "./auth-submit";
 
 describe("authSubmitView", () => {
   test("idle: button enabled with the idle label", () => {
@@ -32,5 +38,41 @@ describe("beginAuthSubmit", () => {
     endAuthSubmit(lock);
     expect(lock.current).toBe(false);
     expect(beginAuthSubmit(lock)).toBe(true);
+  });
+});
+
+describe("finishNativeAuthSubmit", () => {
+  test("successful native submit keeps the lock (navigation in flight)", () => {
+    const lock = { current: true };
+    const form = { submit() {} } as HTMLFormElement;
+    expect(finishNativeAuthSubmit(form, lock)).toBe(true);
+    expect(lock.current).toBe(true);
+  });
+
+  test("missing form or submit throw unlocks so the button is not stuck", () => {
+    const missing = { current: true };
+    expect(finishNativeAuthSubmit(null, missing)).toBe(false);
+    expect(missing.current).toBe(false);
+
+    const thrown = { current: true };
+    const form = {
+      submit() {
+        throw new Error("blocked");
+      },
+    } as HTMLFormElement;
+    expect(finishNativeAuthSubmit(form, thrown)).toBe(false);
+    expect(thrown.current).toBe(false);
+  });
+});
+
+describe("authSubmitStillMounted", () => {
+  test("unmount during collectTokens unlocks", () => {
+    const lock = { current: true };
+    expect(authSubmitStillMounted({ current: false }, lock)).toBe(false);
+    expect(lock.current).toBe(false);
+    const alive = { current: true };
+    const held = { current: true };
+    expect(authSubmitStillMounted(alive, held)).toBe(true);
+    expect(held.current).toBe(true);
   });
 });

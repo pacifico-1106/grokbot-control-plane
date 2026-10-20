@@ -40,7 +40,8 @@ afterEach(() => {
 describe("signup unused-token widget gating", () => {
   test("flag OFF: one local widget, no supabase field", async () => {
     const html = await render();
-    expect(html).toContain("cf-turnstile");
+    expect(html).toContain('data-auth-turnstile="visible"');
+    expect(html).not.toMatch(/class="cf-turnstile"/);
     expect(html).toContain("data-action=\"signup\"");
     expect(html).not.toContain("cf-turnstile-supabase");
     expect(html).not.toContain("supabase_auth");
@@ -55,8 +56,8 @@ describe("signup unused-token widget gating", () => {
     expect(html).toContain('data-execution="execute"');
     expect(html).toContain('data-appearance="execute"');
     expect(html).not.toContain("interaction-only");
-    const userFacing = html.match(/class="cf-turnstile"/g) ?? [];
-    expect(userFacing).toHaveLength(1);
+    expect(html).not.toMatch(/class="cf-turnstile"/);
+    expect(html.match(/data-auth-turnstile="visible"/g)).toHaveLength(1);
   });
 
   test("submit button is disabled and labeled while sending", async () => {

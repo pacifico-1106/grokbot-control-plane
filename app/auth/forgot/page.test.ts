@@ -51,7 +51,8 @@ describe("forgot-password Turnstile widget gating", () => {
     process.env[FLAG] = "true";
     process.env[SITE] = "1x00000000000000000000AA";
     const html = await render();
-    expect(html).toContain("cf-turnstile");
+    expect(html).toContain('data-auth-turnstile="visible"');
+    expect(html).not.toMatch(/class="cf-turnstile"/);
     expect(html).toContain("challenges.cloudflare.com/turnstile/v0/api.js");
     expect(html).toContain("1x00000000000000000000AA");
     expect(html).toContain("password_reset");
@@ -68,7 +69,7 @@ describe("forgot-password Turnstile widget gating", () => {
     process.env[SB_FLAG] = "true";
     process.env[SITE] = "1x00000000000000000000AA";
     const html = await render();
-    expect(html).toContain("cf-turnstile");
+    expect(html).toContain('data-auth-turnstile="visible"');
     expect(html).toContain("1x00000000000000000000AA");
     expect(html).not.toContain("cf-turnstile-supabase");
   });
@@ -78,15 +79,15 @@ describe("forgot-password Turnstile widget gating", () => {
     process.env[SB_FLAG] = "true";
     process.env[SITE] = "1x00000000000000000000AA";
     const html = await render();
-    expect(html).toContain("cf-turnstile");
+    expect(html).toContain('data-auth-turnstile="visible"');
     expect(html).toContain("password_reset");
     expect(html).toContain("cf-turnstile-supabase");
     expect(html).toContain("supabase_auth");
     expect(html).toContain('data-execution="execute"');
     expect(html).toContain('data-appearance="execute"');
     expect(html).not.toContain("interaction-only");
-    const userFacing = html.match(/class="cf-turnstile"/g) ?? [];
-    expect(userFacing).toHaveLength(1);
+    expect(html).not.toMatch(/class="cf-turnstile"/);
+    expect(html.match(/data-auth-turnstile="visible"/g)).toHaveLength(1);
   });
 
   test("sent=1 hides the form and uses the same completion copy for every address", async () => {

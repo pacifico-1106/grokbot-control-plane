@@ -1,9 +1,16 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AuthTurnstileFields } from "@/components/AuthTurnstileFields";
 import { PASSWORD_RESET_SENT_MESSAGE, PASSWORD_RESET_TURNSTILE_ACTION } from "@/lib/auth/password-reset-ui";
-import { authSubmitView, beginAuthSubmit, endAuthSubmit } from "@/lib/auth/auth-submit";
+import {
+  authFieldLock,
+  authSubmitStillMounted,
+  authSubmitView,
+  beginAuthSubmit,
+  endAuthSubmit,
+  finishNativeAuthSubmit,
+} from "@/lib/auth/auth-submit";
 import {
   type AuthTurnstilePair,
   writeAuthCaptchaFields,
@@ -35,11 +42,16 @@ export function ForgotPasswordForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError);
   const lock = useRef(false);
+  const mounted = useRef(true);
   const pairRef = useRef<AuthTurnstilePair | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const needUnusedSupabase = Boolean(siteKey && localTurnstile && supabaseCaptcha);
   const localAction = localTurnstile ? PASSWORD_RESET_TURNSTILE_ACTION : SUPABASE_AUTH_CAPTCHA_ACTION;
   const button = authSubmitView(busy, "再設定メールを送信", "送信中…");
+
+  useEffect(() => () => {
+    mounted.current = false;
+  }, []);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -57,9 +69,19 @@ export function ForgotPasswordForm({
           setBusy(false);
           return;
         }
+        if (!authSubmitStillMounted(mounted, lock)) {
+          setBusy(false);
+          return;
+        }
         if (formRef.current) writeAuthCaptchaFields(formRef.current, tokens);
       }
-      formRef.current?.submit();
+      if (!authSubmitStillMounted(mounted, lock)) {
+        setBusy(false);
+        return;
+      }
+      if (!finishNativeAuthSubmit(formRef.current, lock)) {
+        setBusy(false);
+      }
     } catch {
       setError(ERRORS.turnstile_failed);
       pairRef.current?.reset();
@@ -100,7 +122,7 @@ export function ForgotPasswordForm({
             autoComplete="email"
             required
             maxLength={254}
-            disabled={busy}
+            {...authFieldLock(busy)}
             className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
           />
         </label>

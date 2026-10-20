@@ -1,9 +1,16 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { AuthTurnstileFields } from "@/components/AuthTurnstileFields";
-import { authSubmitView, beginAuthSubmit, endAuthSubmit } from "@/lib/auth/auth-submit";
+import {
+  authFieldLock,
+  authSubmitStillMounted,
+  authSubmitView,
+  beginAuthSubmit,
+  endAuthSubmit,
+  finishNativeAuthSubmit,
+} from "@/lib/auth/auth-submit";
 import {
   type AuthTurnstilePair,
   writeAuthCaptchaFields,
@@ -35,10 +42,15 @@ export function SignupForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const lock = useRef(false);
+  const mounted = useRef(true);
   const pairRef = useRef<AuthTurnstilePair | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const needUnusedSupabase = Boolean(siteKey && supabaseCaptcha);
   const button = authSubmitView(busy, "トライアルを開始してダッシュボードへ", "登録中…");
+
+  useEffect(() => () => {
+    mounted.current = false;
+  }, []);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -57,9 +69,19 @@ export function SignupForm({
           setBusy(false);
           return;
         }
+        if (!authSubmitStillMounted(mounted, lock)) {
+          setBusy(false);
+          return;
+        }
         if (formRef.current) writeAuthCaptchaFields(formRef.current, tokens);
       }
-      formRef.current?.submit();
+      if (!authSubmitStillMounted(mounted, lock)) {
+        setBusy(false);
+        return;
+      }
+      if (!finishNativeAuthSubmit(formRef.current, lock)) {
+        setBusy(false);
+      }
     } catch {
       setError(TURNSTILE_ERRORS.turnstile_failed);
       pairRef.current?.reset();
@@ -95,7 +117,8 @@ export function SignupForm({
             maxLength={SIGNUP_ORG_NAME_MAX}
             placeholder="例: 株式会社〇〇"
             autoComplete="organization"
-            disabled={busy || signupClosed}
+            {...authFieldLock(busy)}
+            disabled={signupClosed}
             className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
           />
         </label>
@@ -107,7 +130,8 @@ export function SignupForm({
             required
             defaultValue={demo ? "owner@example.com" : ""}
             placeholder={demo ? undefined : "you@company.com"}
-            disabled={busy || signupClosed}
+            {...authFieldLock(busy)}
+            disabled={signupClosed}
             className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
           />
         </label>
@@ -119,7 +143,8 @@ export function SignupForm({
               type="password"
               required
               minLength={8}
-              disabled={busy || signupClosed}
+              {...authFieldLock(busy)}
+              disabled={signupClosed}
               className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
             />
           </label>
@@ -132,7 +157,11 @@ export function SignupForm({
             name="mode"
             className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm"
             defaultValue="managed"
-            disabled={busy || signupClosed}
+            {...authFieldLock(busy)}
+            disabled={signupClosed}
+            onMouseDown={(event) => {
+              if (busy) event.preventDefault();
+            }}
           >
             <option value="managed">おまかせ導入（こちらで Grok Bot を用意）</option>
             <option value="byo">今の Grok Bot に載せる（持ち込み）</option>
@@ -145,7 +174,8 @@ export function SignupForm({
             type="text"
             placeholder="AIC-XXXX"
             autoComplete="off"
-            disabled={busy || signupClosed}
+            {...authFieldLock(busy)}
+            disabled={signupClosed}
             className="mt-1 w-full min-h-[44px] rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2.5 text-sm outline-none focus:border-[var(--text-faint)]"
           />
         </label>
@@ -155,7 +185,11 @@ export function SignupForm({
             type="checkbox"
             value="accepted"
             required
-            disabled={busy || signupClosed}
+            {...authFieldLock(busy)}
+            disabled={signupClosed}
+            onClick={(event) => {
+              if (busy) event.preventDefault();
+            }}
             className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--accent-strong)]"
           />
           <span>

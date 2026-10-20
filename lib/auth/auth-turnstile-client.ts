@@ -14,6 +14,30 @@ import {
 export const AUTH_TURNSTILE_SCRIPT_SRC =
   "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 export const AUTH_TURNSTILE_EXECUTE_TIMEOUT_MS = 15_000;
+export const AUTH_TURNSTILE_MOUNT_POLL_MS = 200;
+export const AUTH_TURNSTILE_MOUNT_GIVE_UP_MS = 15_000;
+
+export type AuthTurnstileMountTimers = {
+  setInterval: (handler: () => void, ms: number) => unknown;
+  clearInterval: (id: unknown) => void;
+};
+
+/** Poll until Turnstile.render succeeds, then stop. Also stop if it never loads. */
+export function startAuthTurnstileMountPoll(
+  tryMount: () => boolean,
+  timers: AuthTurnstileMountTimers,
+  opts?: { pollMs?: number; giveUpMs?: number }
+): () => void {
+  const pollMs = opts?.pollMs ?? AUTH_TURNSTILE_MOUNT_POLL_MS;
+  const giveUpMs = opts?.giveUpMs ?? AUTH_TURNSTILE_MOUNT_GIVE_UP_MS;
+  if (tryMount()) return () => {};
+  let elapsed = 0;
+  const id = timers.setInterval(() => {
+    elapsed += pollMs;
+    if (tryMount() || elapsed >= giveUpMs) timers.clearInterval(id);
+  }, pollMs);
+  return () => timers.clearInterval(id);
+}
 
 export interface AuthTurnstileRenderOptions {
   sitekey: string;
@@ -122,7 +146,7 @@ export function createAuthTurnstilePair(options: {
         },
         "error-callback": () => {
           localToken = null;
-          return true;
+          return false;
         },
       }) ?? null;
     return visibleId !== null;
@@ -155,7 +179,7 @@ export function createAuthTurnstilePair(options: {
         },
         "error-callback": () => {
           settleExecute(null, new Error("error"));
-          return true;
+          return false;
         },
       }) ?? null;
     return executeId !== null;
@@ -206,17 +230,22 @@ export function createAuthTurnstilePair(options: {
         return { ok: true, localToken: local, supabaseToken: "" };
       }
       if (!executeId) return { ok: false, error: "turnstile_failed" };
+      const failUnused = (): AuthTurnstileCollectResult => {
+        localToken = null;
+        resetId(visibleId);
+        return { ok: false, error: "turnstile_failed" };
+      };
       try {
         const unused = (await executeFresh()).trim();
         if (!unused || unused === local) {
-          return { ok: false, error: "turnstile_failed" };
+          return failUnused();
         }
         localToken = null;
         resetId(visibleId);
         resetId(executeId);
         return { ok: true, localToken: local, supabaseToken: unused };
       } catch {
-        return { ok: false, error: "turnstile_failed" };
+        return failUnused();
       }
     },
     reset() {

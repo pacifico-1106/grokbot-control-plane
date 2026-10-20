@@ -50,7 +50,8 @@ describe("login Turnstile widget gating", () => {
     process.env[FLAG] = "true";
     process.env[SITE] = "1x00000000000000000000AA";
     const html = await render();
-    expect(html).toContain("cf-turnstile");
+    expect(html).toContain('data-auth-turnstile="visible"');
+    expect(html).not.toMatch(/class="cf-turnstile"/);
     expect(html).toContain("challenges.cloudflare.com/turnstile/v0/api.js");
     expect(html).toContain("1x00000000000000000000AA");
   });
@@ -66,11 +67,11 @@ describe("login Turnstile widget gating", () => {
     process.env[FLAG] = "true";
     process.env[SITE] = "1x00000000000000000000AA";
     const html = await render();
-    expect(html).toContain("cf-turnstile");
+    expect(html).toContain('data-auth-turnstile="visible"');
     expect(html).not.toContain("cf-turnstile-supabase");
     expect(html).not.toContain("interaction-only");
-    const userFacing = html.match(/class="cf-turnstile"/g) ?? [];
-    expect(userFacing).toHaveLength(1);
+    expect(html).not.toMatch(/class="cf-turnstile"/);
+    expect(html.match(/data-auth-turnstile="visible"/g)).toHaveLength(1);
   });
 
   test("submit button is disabled and labeled while sending", async () => {

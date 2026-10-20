@@ -6,7 +6,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   AUTH_TURNSTILE_EXECUTE_TIMEOUT_MS,
+  AUTH_TURNSTILE_MOUNT_GIVE_UP_MS,
+  AUTH_TURNSTILE_MOUNT_POLL_MS,
   createAuthTurnstilePair,
+  startAuthTurnstileMountPoll,
   type AuthTurnstileApi,
   type AuthTurnstileRenderOptions,
 } from "./auth-turnstile-client";
@@ -62,6 +65,10 @@ describe("createAuthTurnstilePair", () => {
     expect(unused.appearance).toBe("execute");
     expect(unused.action).toBe("supabase_auth");
     expect(unused["response-field-name"]).toBe("cf-turnstile-supabase");
+    expect(visible.retry).toBe("never");
+    expect(unused.retry).toBe("never");
+    expect(visible["error-callback"]("600010")).toBe(false);
+    expect(unused["error-callback"]("600010")).toBe(false);
   });
 
   test("collectTokens returns two distinct tokens and never reuses them", async () => {
@@ -150,5 +157,90 @@ describe("createAuthTurnstilePair", () => {
   test("execute timeout constant is fail-closed, not infinite", () => {
     expect(AUTH_TURNSTILE_EXECUTE_TIMEOUT_MS).toBeGreaterThan(0);
     expect(AUTH_TURNSTILE_EXECUTE_TIMEOUT_MS).toBeLessThanOrEqual(20_000);
+  });
+
+  test("execute failure clears localToken so it cannot be resent", async () => {
+    const s = setup();
+    s.pair.mountVisible(el());
+    s.pair.mountExecute(el());
+    s.opts("w1").callback("tok-local");
+    s.api.execute = (id) => {
+      s.calls.push(`execute:${id}`);
+    };
+    const first = await s.pair.collectTokens();
+    expect(first).toEqual({ ok: false, error: "turnstile_failed" });
+    const second = await s.pair.collectTokens();
+    expect(second).toEqual({ ok: false, error: "turnstile_required" });
+    expect(s.calls.filter((c) => c.startsWith("execute:")).length).toBe(1);
+  });
+
+  test("same-token execute failure also clears localToken", async () => {
+    const s = setup();
+    s.pair.mountVisible(el());
+    s.pair.mountExecute(el());
+    s.opts("w1").callback("tok-same");
+    s.api.execute = (id) => {
+      s.calls.push(`execute:${id}`);
+      queueMicrotask(() => s.opts("w2").callback("tok-same"));
+    };
+    expect(await s.pair.collectTokens()).toEqual({ ok: false, error: "turnstile_failed" });
+    expect(await s.pair.collectTokens()).toEqual({ ok: false, error: "turnstile_required" });
+  });
+});
+
+describe("startAuthTurnstileMountPoll", () => {
+  test("poll interval is 200ms and give-up is finite", () => {
+    expect(AUTH_TURNSTILE_MOUNT_POLL_MS).toBe(200);
+    expect(AUTH_TURNSTILE_MOUNT_GIVE_UP_MS).toBeGreaterThan(0);
+    expect(AUTH_TURNSTILE_MOUNT_GIVE_UP_MS).toBeLessThanOrEqual(20_000);
+  });
+
+  test("stops polling when the widget never mounts", () => {
+    const calls: string[] = [];
+    const timers = new Map<unknown, () => void>();
+    let nextId = 0;
+    const stop = startAuthTurnstileMountPoll(
+      () => {
+        calls.push("try");
+        return false;
+      },
+      {
+        setInterval: (handler) => {
+          const id = ++nextId;
+          timers.set(id, handler);
+          calls.push(`start:${id}`);
+          return id;
+        },
+        clearInterval: (id) => {
+          timers.delete(id);
+          calls.push(`clear:${id}`);
+        },
+      },
+      { pollMs: 200, giveUpMs: 400 }
+    );
+    expect(calls).toEqual(["try", "start:1"]);
+    timers.get(1)!();
+    expect(calls.filter((c) => c === "try")).toHaveLength(2);
+    expect(calls).not.toContain("clear:1");
+    timers.get(1)!();
+    expect(calls.filter((c) => c === "try")).toHaveLength(3);
+    expect(calls).toContain("clear:1");
+    expect(timers.size).toBe(0);
+    stop();
+  });
+
+  test("does not start an interval when the first mount succeeds", () => {
+    const calls: string[] = [];
+    startAuthTurnstileMountPoll(
+      () => true,
+      {
+        setInterval: () => {
+          calls.push("start");
+          return 1;
+        },
+        clearInterval: () => calls.push("clear"),
+      }
+    );
+    expect(calls).toEqual([]);
   });
 });

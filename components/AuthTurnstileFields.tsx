@@ -5,6 +5,7 @@ import Script from "next/script";
 import {
   AUTH_TURNSTILE_SCRIPT_SRC,
   createAuthTurnstilePair,
+  startAuthTurnstileMountPoll,
   type AuthTurnstileApi,
   type AuthTurnstilePair,
 } from "@/lib/auth/auth-turnstile-client";
@@ -50,13 +51,13 @@ export function AuthTurnstileFields({
       return true;
     };
 
-    tryMount();
-    const id = window.setInterval(() => {
-      if (tryMount()) window.clearInterval(id);
-    }, 200);
+    const stopPoll = startAuthTurnstileMountPoll(tryMount, {
+      setInterval: (handler, ms) => window.setInterval(handler, ms),
+      clearInterval: (id) => window.clearInterval(id as number),
+    });
 
     return () => {
-      window.clearInterval(id);
+      stopPoll();
       pair.unmount();
       if (pairRef.current === pair) pairRef.current = null;
     };
@@ -65,9 +66,10 @@ export function AuthTurnstileFields({
   return (
     <>
       <Script src={AUTH_TURNSTILE_SCRIPT_SRC} strategy="afterInteractive" />
+      {/* No class="cf-turnstile": implicit render would double-draw with render=explicit. */}
       <div
         ref={visibleRef}
-        className="cf-turnstile"
+        data-auth-turnstile="visible"
         data-sitekey={siteKey}
         data-action={localAction}
         data-language="ja"
