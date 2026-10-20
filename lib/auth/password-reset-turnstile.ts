@@ -11,8 +11,9 @@
  */
 import { createHash } from "node:crypto";
 import type { TurnstileVerifyResult } from "@/lib/lp/turnstile";
+import { PASSWORD_RESET_TURNSTILE_ACTION } from "@/lib/auth/password-reset-ui";
+export { PASSWORD_RESET_SENT_MESSAGE, PASSWORD_RESET_TURNSTILE_ACTION } from "@/lib/auth/password-reset-ui";
 
-export const PASSWORD_RESET_TURNSTILE_ACTION = "password_reset";
 export const PASSWORD_RESET_TURNSTILE_DEFAULT_HOSTNAME = "staffpass.sealith.com";
 
 /** Separate IP brake for CAPTCHA / siteverify attempts (not the send quota). */

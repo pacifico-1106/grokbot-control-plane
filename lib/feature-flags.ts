@@ -1022,9 +1022,11 @@ export function isPasswordResetTurnstileEnabled(): boolean {
  *   We do not siteverify it (single-use; Supabase redeems it).
  * - POST /api/auth/signup still siteverifies the existing signup widget, and
  *   requires a second unused token for the post-create signInWithPassword.
+ *   The unused token is minted with execution=execute (not a second checkbox).
  * - POST /api/auth/forgot-password forwards captchaToken. If
  *   PASSWORD_RESET_TURNSTILE_ENABLED is also ON, that local siteverify keeps
- *   using a different token; the same token is never reused.
+ *   using a different token; the same token is never reused. The unused
+ *   token is likewise minted with execution=execute.
  *
  * When OFF (default): Auth payloads match main (no captchaToken key). Local
  * Turnstile behavior is unchanged.
