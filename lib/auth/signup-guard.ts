@@ -21,12 +21,14 @@
  */
 import { DEMO_ORG } from "@/lib/demo-data";
 import type { TurnstileVerifyResult } from "@/lib/lp/turnstile";
-import { validateOrgNameStrict, ORG_NAME_MAX_LENGTH } from "@/lib/text/org-name";
+import { validateOrgNameStrict } from "@/lib/text/org-name";
 import { isOrgNameInputStrictEnabled } from "@/lib/feature-flags";
-
-export const SIGNUP_TURNSTILE_ACTION = "signup";
-export const SIGNUP_HONEYPOT_FIELD = "company_website";
-export const SIGNUP_ORG_NAME_MAX = ORG_NAME_MAX_LENGTH;
+import { SIGNUP_ORG_NAME_MAX, SIGNUP_TURNSTILE_ACTION } from "@/lib/auth/signup-ui";
+export {
+  SIGNUP_HONEYPOT_FIELD,
+  SIGNUP_ORG_NAME_MAX,
+  SIGNUP_TURNSTILE_ACTION,
+} from "@/lib/auth/signup-ui";
 export const REFERRAL_CODE_PATTERN = /^AIC-[A-Z0-9]{4,16}$/;
 
 export type SignupGuardInput = {

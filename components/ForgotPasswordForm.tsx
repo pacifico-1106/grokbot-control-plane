@@ -2,7 +2,7 @@
 
 import { useRef, useState, type FormEvent } from "react";
 import { AuthTurnstileFields } from "@/components/AuthTurnstileFields";
-import { PASSWORD_RESET_TURNSTILE_ACTION, PASSWORD_RESET_SENT_MESSAGE } from "@/lib/auth/password-reset-turnstile";
+import { PASSWORD_RESET_SENT_MESSAGE, PASSWORD_RESET_TURNSTILE_ACTION } from "@/lib/auth/password-reset-ui";
 import { authSubmitView, beginAuthSubmit, endAuthSubmit } from "@/lib/auth/auth-submit";
 import {
   type AuthTurnstilePair,

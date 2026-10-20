@@ -62,7 +62,6 @@ export function createAuthTurnstilePair(options: {
   let visibleEl: HTMLElement | null = null;
   let executeEl: HTMLElement | null = null;
   let localToken: string | null = null;
-  let executeToken: string | null = null;
   let pendingExecute: {
     resolve: (token: string) => void;
     reject: (err: Error) => void;
@@ -135,7 +134,6 @@ export function createAuthTurnstilePair(options: {
     if (!api) return false;
     if (executeId && executeEl === el) return true;
     if (executeId) remove(executeId);
-    executeToken = null;
     executeEl = el;
     executeId =
       api.render(el, {
@@ -147,19 +145,15 @@ export function createAuthTurnstilePair(options: {
         "response-field-name": SUPABASE_AUTH_CAPTCHA_FIELD,
         retry: "never",
         callback: (t) => {
-          executeToken = t;
           settleExecute(t);
         },
         "expired-callback": () => {
-          executeToken = null;
           settleExecute(null, new Error("expired"));
         },
         "timeout-callback": () => {
-          executeToken = null;
           settleExecute(null, new Error("timeout"));
         },
         "error-callback": () => {
-          executeToken = null;
           settleExecute(null, new Error("error"));
           return true;
         },
@@ -174,7 +168,6 @@ export function createAuthTurnstilePair(options: {
         reject(new Error("not_loaded"));
         return;
       }
-      executeToken = null;
       resetId(executeId);
       const timer = setTimeout(() => {
         settleExecute(null, new Error("timeout"));
@@ -219,7 +212,6 @@ export function createAuthTurnstilePair(options: {
           return { ok: false, error: "turnstile_failed" };
         }
         localToken = null;
-        executeToken = null;
         resetId(visibleId);
         resetId(executeId);
         return { ok: true, localToken: local, supabaseToken: unused };
@@ -229,7 +221,6 @@ export function createAuthTurnstilePair(options: {
     },
     reset() {
       localToken = null;
-      executeToken = null;
       settleExecute(null, new Error("reset"));
       resetId(visibleId);
       resetId(executeId);
@@ -243,7 +234,6 @@ export function createAuthTurnstilePair(options: {
       visibleEl = null;
       executeEl = null;
       localToken = null;
-      executeToken = null;
     },
   };
 }

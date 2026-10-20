@@ -12,7 +12,7 @@ import {
   SIGNUP_HONEYPOT_FIELD,
   SIGNUP_ORG_NAME_MAX,
   SIGNUP_TURNSTILE_ACTION,
-} from "@/lib/auth/signup-guard";
+} from "@/lib/auth/signup-ui";
 
 const TURNSTILE_ERRORS: Record<string, string> = {
   turnstile_required: "ロボットでないことの確認を完了してください。",
