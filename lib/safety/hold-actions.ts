@@ -37,6 +37,7 @@ import { getHoldStore, HoldStoreError, type HoldRecord } from "@/lib/safety/hold
 import { readLiveHold, type HoldKind } from "@/lib/safety/hold";
 import { verifyReleaseAuthentication } from "@/lib/safety/hold-release-auth";
 import { notifyHold } from "@/lib/safety/hold-notify";
+import { hasVisibleReasonText } from "@/lib/safety/required-reason";
 
 export type HoldMemberSurface = "web" | "slack" | "line" | "telegram";
 export type HoldActor =
@@ -106,7 +107,7 @@ export async function actorForAdminStop(input: {
 
 function cleanReason(reason: unknown): string | null {
   const s = typeof reason === "string" ? Array.from(reason.trim()).slice(0, REASON_MAX).join("") : "";
-  return s || null;
+  return hasVisibleReasonText(s) ? s : null;
 }
 
 /** Release surfaces + freshness: delegated to the ONE swappable function (passkey later). */
