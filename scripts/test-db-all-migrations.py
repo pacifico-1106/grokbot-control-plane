@@ -150,6 +150,9 @@ ADDITIVE = [
     ("20261016200000_", "tests/security/db-operator-notices.sql",
      ("operator_notices", "operator_notice_versions", "operator_notice_targets",
       "operator_notice_receipts", "ops_feedback_items", "ops_feedback_events")),
+    # L0 / #228 LINE approver link codes (HMAC only). Independent of L-1 tables.
+    ("20261003180000_", "tests/security/db-line-approver-link-codes.sql",
+     ("line_approver_link_codes",)),
     # L-6 child first: roll back 20261014100000 before the parent
     # 20261013200000. Parent rollback refuses while these tables exist.
     ("20261014100000_", "tests/security/db-comm-line-reply-tokens.sql",

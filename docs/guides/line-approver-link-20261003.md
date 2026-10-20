@@ -23,10 +23,10 @@
 | `LINE_WORKFLOW_REVISION_REPLY` | G5。合議（ワークフロー）中の承認に LINE から修正依頼が来たら、黙って無視せず「LINE からの修正依頼は受け付けできない。承認・却下を選ぶか Staffpass で対応してほしい」と返信する |
 | `LINE_RESOLVE_FOLLOWUP_REPLY` | G7。承認・却下のあとの「✅ 承認済み …」の追加通知を、有料の Push ではなく同じ Reply にまとめて送る。Reply が失敗したときは Push で送り直す |
 
-## 本番での手順（実行は八坂さん・木村さんの判断）
+## 本番での手順（このPRでは実行しない。適用は八坂さん・木村さんの判断）
 
-1. migration `supabase/migrations/20261003180000_line_approver_link_codes.sql` を適用する。`LINE_APPROVER_LINK_ENABLED` を ON にする前に必須。
-2. `VOTER_BINDING_SECRET` が本番で設定されていることを確認する（既存の紐付けでも必須。未設定ならコード発行 API は 503 を返す）。
+1. migration `supabase/migrations/20261003180000_line_approver_link_codes.sql` を適用する。`LINE_APPROVER_LINK_ENABLED` を ON にする前に必須。戻すときは `supabase/verification/20261003180000_line_approver_link_codes_rollback.sql`（未使用のコードが残っていると `ROLLBACK_REFUSED`）。
+2. `VOTER_BINDING_SECRET` が本番で設定されていることを確認する（既存の紐付けでも必須。未設定ならコード発行 API は 503 を返す）。値はテナント画面にもログにも出さない。
 3. Vercel env で必要なフラグを `true` にする。順番は `LINE_APPROVER_LINK_ENABLED`（承認者に連携してもらう）、次に `LINE_APPROVER_BINDING_MATCH`（承認者 ID をメンバー ID で書く場合）。`LINE_WORKFLOW_REVISION_REPLY` と `LINE_RESOLVE_FOLLOWUP_REPLY` はそれぞれ単独で ON にできる。
 4. LINE Developers コンソール
    - Webhook URL は設定画面に出る `/api/webhooks/line/<ref>` を正確に入れる。間違った URL では「検証」が**失敗する**ようになった（404）。
@@ -34,8 +34,15 @@
    - あいさつメッセージに「Staffpass の設定画面で発行した連携コードを、このトークに送ってください」と書いておくと案内しやすい。
 5. 承認者（例: Space Tree の野木さん）の手順: Staffpass にログイン → 設定 → 承認を受け取る（LINE）→「連携コードを発行」→ LINE の 1:1 トークにコードを送る →「確認しました」と返信が来る → 設定画面の「確認済み LINE ユーザー ID」を、管理者が許可user ID または承認者 ID に貼る。
 
+## §7（2026-10-12 決定）をこの経路で守ること
+
+- **本文は保存しない。** 承認 Webhook は通常の 1:1 テキストを無視する（連携コードと修正依頼だけを見る）。監査にも本文を残さない。
+- **画像・ファイルは取らない。** `message.type` が text / postback 以外なら何もしない。LINE のコンテンツ API は呼ばない。
+- **承認窓口と会話の公式アカウントは同じ。** PoC では AI 社員の公式アカウントが承認窓口を兼ねる。会話の受け口（`/api/webhooks/line/c/<ref>`、フラグ `LINE_CONVERSATION_ENABLED`）は別 URL なので、同じ OA にするときは LINE コンソールの Webhook は承認 URL のままにし、会話の振り分けは後続（L1）で足す。
+
 ## やっていないこと（後続）
 
 - **v2.1 チャネルアクセストークンの自動更新**: 今は設定画面に保存された long-lived token をそのまま使っている。自動更新には channel ID と secret による stateless token の発行（`/oauth2/v3/token`）、キャッシュ、失効時の再発行が必要になる。保存する秘密情報と外部への通信が増えるので、このPRには入れていない。当面は long-lived token（期限なし）を使う運用とする。
 - **follow イベント**: 今も無視している。友だち追加だけでは本人かどうか証明できないので、自動では紐付けない（設計どおり）。
-- G8（LINE を会話の窓口にする）は対象外。
+- G8（LINE を会話の窓口にする）と LINE WORKS は対象外。
+- このPRでは本番への migration 適用・フラグ ON は行わない。

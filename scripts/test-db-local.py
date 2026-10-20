@@ -658,6 +658,34 @@ try:
     print("PASS: hold release actor_email (20261016300000): release audit row.actor_email is org_members.email of "
           "resolved_by; p_audit_metadata cannot forge it; EXECUTE service_role only; re-applicable; rollback restores "
           "the 20261012500000 body; forward again.")
+    # L0 / #228 LINE approver link codes (20261003180000). HMAC only. Flag OFF.
+    l0lc = ROOT / "supabase/migrations/20261003180000_line_approver_link_codes.sql"
+    l0lc_rb = ROOT / "supabase/verification/20261003180000_line_approver_link_codes_rollback.sql"
+    sql(l0lc)
+    sql(l0lc)  # re-applicable
+    sql(ROOT / "tests/security/db-line-approver-link-codes.sql")
+    query("insert into public.orgs(id, name) values ('a0318000-0000-4000-8000-0000000000f1', 'l0 rb');"
+          "insert into public.org_members(id, org_id, email, role, status) values"
+          " ('a0318000-0000-4000-8000-0000000000f2', 'a0318000-0000-4000-8000-0000000000f1', 'l0-rb@fixture.invalid', 'admin', 'active');"
+          "insert into public.org_notification_channels(id, org_id, provider, label, enabled, webhook_ref) values"
+          " ('a0318000-0000-4000-8000-0000000000f3', 'a0318000-0000-4000-8000-0000000000f1', 'line', 'LINE', true, 'l0rollback01');"
+          "insert into public.line_approver_link_codes(org_id, channel_id, member_id, code_hash, expires_at) values"
+          " ('a0318000-0000-4000-8000-0000000000f1', 'a0318000-0000-4000-8000-0000000000f3',"
+          "  'a0318000-0000-4000-8000-0000000000f2', repeat('11', 32), now() + interval '15 minutes');")
+    try:
+        sql(l0lc_rb)
+        raise AssertionError("line link-code rollback ran while an unused code existed")
+    except subprocess.CalledProcessError:
+        pass
+    assert query("select to_regclass('public.line_approver_link_codes') is not null;") == "t"
+    query("delete from public.orgs where id = 'a0318000-0000-4000-8000-0000000000f1';")
+    sql(l0lc_rb)
+    assert query("select to_regclass('public.line_approver_link_codes') is null;") == "t"
+    sql(l0lc)  # forward again after rollback
+    sql(ROOT / "tests/security/db-line-approver-link-codes.sql")
+    print("PASS: line_approver_link_codes (20261003180000): RLS on, restrictive deny-all only, anon/authenticated no access; "
+          "HMAC-only (64 hex, unique), same-org member FK, org delete cascades, no plaintext column; re-applicable; "
+          "rollback refused while an unused code exists, then drops the table; forward again.")
     # LINE PoC per-employee accounts / secrets / inbound dedup / link-code limits (20261013200000).
     eca = ROOT / "supabase/migrations/20261013200000_employee_comm_accounts.sql"
     eca_rb = ROOT / "supabase/verification/20261013200000_employee_comm_accounts_rollback.sql"
