@@ -4,12 +4,16 @@
  * Stop remains optional.
  *
  * Emptiness is decided by hasVisibleReasonText (shared with cleanReason).
- * Stored reasons stay trim-only so mid-string ZWJ in emoji is kept.
+ * Stored reasons stay trim-only so mid-string ZWJ / VS16 in emoji is kept.
  */
 
-/** C0/C1 + zero-width / format / invisible controls. Emptiness check only — not stripped from stored text. */
+/**
+ * C0/C1 + zero-width / format / invisible controls, hangul fillers,
+ * variation selectors, and tag characters. Emptiness check only — not stripped
+ * from stored text. `u` so supplementary-plane ranges match as code points.
+ */
 const INVISIBLE_REASON_CHARS =
-  /[\u0000-\u001F\u007F-\u009F\u200B-\u200D\u200E\u200F\u202A-\u202E\u2060-\u2069\uFEFF\u00AD\u180E]/g;
+  /[\u0000-\u001F\u007F-\u009F\u061C\u00AD\u115F\u1160\u180E\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0001}\u{E0020}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
 
 export const REQUIRED_REASON_HINT_JA = "理由を入力してください";
 
