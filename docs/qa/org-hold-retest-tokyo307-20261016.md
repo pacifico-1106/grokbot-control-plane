@@ -270,7 +270,7 @@ where o.id = '92f3617c-33fc-4dac-b9b4-d4f42e8522ac';
 チケット:
 
 ```sql
-select id, title, purpose, tool, status, metadata
+select id, title, purpose, tool, status, approver_member_id, required_approver_kind, metadata
 from public.approval_requests
 where org_id = '92f3617c-33fc-4dac-b9b4-d4f42e8522ac'
   and coalesce(metadata->>'adminTool', tool, '') = 'employee.hold.release'
@@ -278,7 +278,7 @@ where org_id = '92f3617c-33fc-4dac-b9b4-d4f42e8522ac'
 order by created_at desc;
 ```
 
-期待: `title` = 「緊急停止の解除（組織全体）」、`purpose` / `tool` = `employee.hold.release`、`status` = `pending`（`lib/safety/hold-actions.ts` `requestHoldRelease`）。
+期待: `title` = 「緊急停止の解除（組織全体）」、`purpose` / `tool` = `employee.hold.release`、`status` = `pending`（`lib/safety/hold-actions.ts` `requestHoldRelease`）。`approver_member_id` と `required_approver_kind` は **どちらも null**。承認者は前もって指名されない（eligible なら owner / 指定管理者のだれでも。hold 解除は approver-authority 対象ツールではない）。
 
 **監査合否**
 
@@ -319,13 +319,13 @@ order by created_at desc;
 
 ### 段階 4 — tyasaka@ が `/app/approvals` で承認＝解除
 
-`approveHoldRelease` は承認と `release_employee_hold` を続けて呼ぶ。ボタンは「解除を承認」で、成功すると hold は閉じる（段階 5 と同操作）。
+`approveHoldRelease` は承認と `release_employee_hold` を続けて呼ぶ。ボタンは「解除を承認」。**この一押しで段階 4 と段階 5 が同時に完了する**（別の解除操作は無い）。2026-10-20 本番再テスト（合格）でも、押した時点で hold が閉じ、段階 5 の SQL が取れた。
 
 1. tyasaka@ でログアウト→ログイン（5 分窓）。info@ のセッションでは承認しない（`self_approval_denied`）。
 2. https://staffpass.sealith.com/app/approvals
 3. 行「緊急停止の解除（組織全体）」で **「解除を承認」**（汎用の「承認」ではない。汎用は `hold_release_web_only`）。
 
-**画面合否**: エラー無し。HoldPanel の「緊急停止中」が消える（`/app` 再読み込み）。
+**画面合否**: エラー無し。HoldPanel の「緊急停止中」が消える（`/app` 再読み込み）。段階 5 もここで完了。
 
 **API 合否**: `POST /api/holds/release/approve` 200。
 
@@ -339,11 +339,13 @@ order by created_at desc;
 | `ops_hold_ops_only` | §8 |
 | `release_approver_not_allowed` | owner / 指定管理者ではない |
 
-承認に成功したら段階 5 の SQL を取る。失敗して hold が残っていたら、チケットを pending に戻す実装がある（`hold-actions.ts` `approveHoldRelease` の catch）。同じチケットで再試行。
+承認に成功したら段階 5 の SQL を取る（追加の画面操作は不要。段階 4 と同時）。失敗して hold が残っていたら、チケットを pending に戻す実装がある（`hold-actions.ts` `approveHoldRelease` の catch）。同じチケットで再試行。
 
 ---
 
 ### 段階 5 — 解除の確定
+
+段階 4 の「解除を承認」と同時。追加のボタン操作は無い。以下は SQL 確認。
 
 **DB 合否**
 
@@ -367,7 +369,9 @@ order by h.started_at desc nulls last;
 | `released_by` | `member:<tyasaka@ の member id>`（制約は `member:` のみ。`ops:` 不可） |
 | `started_via` | 履歴行は `web` のまま |
 
-**監査合否**（`release_employee_hold` が **同じトランザクション** で insert。`supabase/migrations/20261012500000_employee_holds.sql`。アプリの `appendAuditEvent` ではない）
+**監査合否**（`release_employee_hold` が **同じトランザクション** で insert。現行は `supabase/migrations/20261016300000_hold_release_actor_email.sql`。アプリの `appendAuditEvent` ではない）
+
+2026-10-20 本番再テスト（合格）の実測。アドレスは書かない。
 
 ```sql
 select id, created_at, action, actor_email, employee_id, purpose, summary, metadata
@@ -378,18 +382,35 @@ where org_id = '92f3617c-33fc-4dac-b9b4-d4f42e8522ac'
 order by created_at desc;
 ```
 
-| 列 | 期待（書き込み設計） | `/app/audit` 投影（#373/#374） |
+| 列 | 期待（書き込み設計 / 本番再テスト） | `/app/audit` 投影（#373/#374） |
 |---|---|---|
 | `action` | `employee.hold.released` | ラベル「緊急停止を解除」 |
 | `summary` | 「緊急停止を解除しました」（`approveHoldRelease` の `auditSummary`） | 同じ要約 |
-| `actor_email` | **SQL insert は `actor_email` を書かない → null** | org 行は `employee_id` も null なので実行者は **「システム」**（`resolveAuditActor`）。人は `metadata.approverEmail` / `releasedBy` に残る |
+| `actor_email` | **承認者のメール**（`org_members.email` of `resolved_by`。呼び出し元 metadata では上書きできない） | 実行者は **人**（承認者の氏名＋マスクメール）。null → 「システム」ではない |
 | `employee_id` | `null` | AI 扱いにしない |
-| `metadata->>'releasedBy'` | `member:<tyasaka@ member id>` | 投影の実行者欄には出ない |
-| `metadata->>'requestedBy'` | `member:<info@ member id>` | 同上 |
-| `metadata->>'via'` | `web` | 同上 |
-| `metadata->>'approverEmail'` | tyasaka@ | 生 JSON は出さない |
+| `metadata->>'releasedBy'` | `member:<承認者の member id>` | 投影の実行者欄には出ない（列 `actor_email` を使う） |
+| `metadata->>'requestedBy'` | `member:<申請者の member id>` | 同上 |
 | `metadata->>'freshLogin'` | `true` | 同上 |
-| `metadata->>'holdId'` / `approvalId` | 当該 id | 承認票は prefix のみ |
+| `metadata->>'approverEmail'` | **無い**（アプリは渡すが RPC が metadata から除く） | — |
+
+本番で確認した metadata キーは `releasedBy` / `requestedBy` / `freshLogin` の 3 つ（`approverEmail` は入っていなかった）。
+
+**チケット（承認後）**
+
+```sql
+select id, status, resolved_by, approver_member_id, required_approver_kind
+from public.approval_requests
+where org_id = '92f3617c-33fc-4dac-b9b4-d4f42e8522ac'
+  and coalesce(metadata->>'adminTool', tool, '') = 'employee.hold.release'
+  and created_at > now() - interval '30 minutes'
+order by created_at desc;
+```
+
+| 列 | 期待（本番再テスト） |
+|---|---|
+| `status` | `approved` |
+| `approver_member_id` | **null**（前もって指名されていない。承認者は `resolved_by`） |
+| `required_approver_kind` | **null** |
 
 **MCP 合否**: `staffpass_whoami` が再び **200 / `ok: true`**。`org_on_hold` が消える。
 
@@ -404,7 +425,7 @@ order by created_at desc;
 | 1 停止 | `web` | （status は 2 で見る） | `member:<info@>` | （2 で見る） | `employee.hold.started` |
 | 2 表示 | `web` | `false` | 同上 | `org_on_hold` | （1 の行） |
 | 3 申請 | `web` | `false` | 同上 | まだ `org_on_hold` | `employee.hold.release_requested` |
-| 4–5 承認＝解除 | 履歴は `web` | ポインタ消滅 | 同上 | whoami 成功 | `employee.hold.released` |
+| 4–5 承認＝解除（「解除を承認」一押しで同時） | 履歴は `web` | ポインタ消滅 | 同上 | whoami 成功 | `employee.hold.released` |
 
 ---
 
@@ -514,15 +535,9 @@ order by started_at;
 |---|---|---|---|---|
 | `employee.hold.started` | 止めた人のメール | 購買AI社員 UUID | 「緊急停止しました」 | `via`, `startedBy`, `scope=employee`, `holdId`。**reason は metadata に無い** |
 | `employee.hold.release_requested` | 申請者メール | 同じ UUID | 「緊急停止の解除申請」 | `requestedBy`, `via`, `approvalId`, `holdId`。理由は `employee_holds.release_reason` |
-| `employee.hold.released` | **null**（SQL が列を埋めていない） | 同じ UUID | 「緊急停止を解除しました」 | `releasedBy`, `requestedBy`, `via`, `approverEmail`, `freshLogin`, `holdId`, `approvalId` |
+| `employee.hold.released` | **承認者のメール**（現行 RPC `20261016300000`。旧 RPC は列を書かず null だった） | 同じ UUID | 「緊急停止を解除しました」 | `releasedBy`, `requestedBy`, `freshLogin`（本番再テストで確認）。`approverEmail` は RPC が除く。`holdId` / `approvalId` は RPC が足す |
 
-`/app/audit` 投影の期待（#374: `employee_id` 優先で AI）:
-
-| action | 実行者 kind | 実行者名 | メール | 注記として見えるもの |
-|---|---|---|---|---|
-| 3 行とも | **AI** | 購買AI社員の `displayName` | バインド mailbox があればマスク。人の `actor_email` は出さない | リストは `summary`。詳細「実行者」は AI 名。人の操作者は投影では隠れる |
-
-これは「人が止めた／解除した」という運用感覚とずれる。#373/#374 の仕様どおり（`lib/audit/actor.ts`, `lib/audit/actor.test.ts`）。不一致として記録する。
+`/app/audit` 投影: hold 行は `HOLD_TRAIL_ACTIONS` で **人**（`lib/audit/actor.ts` `resolveHoldTrailActor`）。`employee_id` があっても購買AI社員にはしない。解除は `releasedBy` ＋列 `actor_email`（承認者のメール、マスク）。旧メモ（#374 が employee_id 優先で AI）は hold trail 導入前。
 
 ### 7b. TOKYO307 組織解除 hold `efcfe065`（2026-10-16 02:33 JST = 2026-10-15 17:33 UTC ±）
 
@@ -561,7 +576,7 @@ from public.employee_holds
 where id = 'efcfe065-566d-43af-9255-ddf2af03d5fe';
 ```
 
-通常 RPC 解除なら `employee.hold.released` が 17:33 UTC 前後に 1 行。`actor_email` は null、`employee_id` は null、`summary` は「緊急停止を解除しました」。`/app/audit` では実行者「システム」。`started` が ops 経路なら `metadata.via` / `startedBy` は `ops_console` / `ops:…`。SQL バイパスで閉じた場合は `released` 行が無い可能性があり、それ自体が設計（RPC と同トランザクション）からのずれ。
+当時の RPC（`20261012500000`）なら `employee.hold.released` が 17:33 UTC 前後に 1 行、`actor_email` は null、`employee_id` は null、`summary` は「緊急停止を解除しました」。現行 RPC（`20261016300000`）は `actor_email` に承認者のメールを入れる。2026-10-20 本番再テスト（合格）はその現行どおりだった。`started` が ops 経路なら `metadata.via` / `startedBy` は `ops_console` / `ops:…`。SQL バイパスで閉じた場合は `released` 行が無い可能性があり、それ自体が設計（RPC と同トランザクション）からのずれ。
 
 ---
 

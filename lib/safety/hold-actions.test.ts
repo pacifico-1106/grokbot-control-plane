@@ -224,7 +224,8 @@ describe("release: web only, ONE authentication function, a different approver",
   });
   test("reason is required", async () => {
     const holdId = await stopped();
-    expect(await actions.requestHoldRelease({ orgId: ORG, holdId, reason: "  ", actor: web(admin()) })).toMatchObject({ ok: false, code: "release_reason_required" });
+    expect(await actions.requestHoldRelease({ orgId: ORG, holdId, reason: "  ", actor: web(admin()) })).toMatchObject({ ok: false, code: "release_reason_required", httpStatus: 400 });
+    expect(await actions.requestHoldRelease({ orgId: ORG, holdId, reason: "", actor: web(admin()) })).toMatchObject({ ok: false, code: "release_reason_required", httpStatus: 400 });
   });
   test("the requester cannot approve (two people); another eligible approver releases; audit written", async () => {
     const holdId = await stopped();
