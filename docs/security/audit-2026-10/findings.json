@@ -1,0 +1,605 @@
+{
+  "audit": "staffpass-2026-10",
+  "repo": "pacifico-1106/grokbot-control-plane",
+  "date": "2026-10-20",
+  "method": "read-only six-phase code review",
+  "counts": {
+    "critical": { "confirmed": 0, "needs_validation": 0, "rejected": 0 },
+    "high": { "confirmed": 0, "needs_validation": 3, "rejected": 0 },
+    "medium": { "confirmed": 15, "needs_validation": 1, "rejected": 0 },
+    "low": { "confirmed": 15, "needs_validation": 1, "rejected": 0 },
+    "info": { "confirmed": 5, "needs_validation": 0, "rejected": 2 },
+    "total": 42
+  },
+  "findings": [
+    {
+      "id": "SP-A-001",
+      "title": "#258/#259 RLS write policies may still be live in production",
+      "severity": "high",
+      "status": "needs_validation",
+      "files": [
+        "supabase/migrations/20261004500000_tenant_tables_server_only_writes.sql",
+        "supabase/migrations/20261004600000_tenant_config_tables_server_only_writes.sql",
+        "supabase/migrations/20261004800000_lp_tables_server_only.sql",
+        "supabase/schema.sql"
+      ],
+      "evidence": "PR #258 and #259 are merged. Migration headers and PR titles say the SQL was NOT APPLIED to production. In-repo end-state drops approvals_write_member, audit_insert_member, orgs_update_admin, subscriptions_write_admin and 17 phase-2 write policies, and REVOKE writes from anon/authenticated. A DB created from current schema.sql is fine; an existing prod DB that never ran these files still lets a tenant session JWT + anon key write approvals, plans, credentials, and bindings via PostgREST.",
+      "exploitability": "High if unapplied (self-approve, forge audit, rewrite plan_key/credentials). None if applied. Cannot be closed from git.",
+      "fix": "Run NEEDS-VALIDATION.md section A. If policies remain, apply 20261004500000 then 20261004600000 then 20261004800000 in a reviewed window.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-001",
+      "title": "Global Telegram webhook: unscoped approval lookup + empty allowlist allows any Telegram user",
+      "severity": "high",
+      "status": "needs_validation",
+      "files": [
+        "app/api/webhooks/telegram/route.ts",
+        "lib/data/approvals.ts",
+        "lib/approvals/tokens.ts"
+      ],
+      "evidence": "isAllowedUser returns true when TELEGRAM_ALLOWED_USER_IDS is empty (route.ts:81-85). handleCallback calls getApprovalByTelegramRef(match[2]) without orgId (route.ts:207). getApprovalByTelegramRef only adds .eq('org_id') when orgId is passed (approvals.ts:593-612). telegram_ref is 48 bits (tokens.ts:9-12). Route still requires TELEGRAM_WEBHOOK_SECRET (route.ts:351-364). Tenant [ref] routes pass channel.orgId.",
+      "exploitability": "Live only if the global bot webhook is registered, allowlist is empty, and an attacker has or brute-forces a telegram_ref.",
+      "fix": "Fail closed on empty allowlist. Always pass orgId. Retire global bot per docs/production-cutover.md and multi-tenant audit M1/M2.",
+      "flag_dependency": "Depends on TELEGRAM_* env (pilot). Not a feature-flags.ts flag."
+    },
+    {
+      "id": "SP-B-013",
+      "title": "DEMO mode on a public host collapses dashboard authentication",
+      "severity": "high",
+      "status": "needs_validation",
+      "files": [
+        "lib/mode.ts",
+        "lib/auth/session.ts",
+        "lib/team/demo-actor.ts",
+        "middleware.ts",
+        "app/api/health/route.ts"
+      ],
+      "evidence": "isDemoMode() is true when any of URL/anon/service_role looks like a placeholder (mode.ts:24-32). getSessionContext then always returns the demo org (session.ts:92-100). requireCapability honors x-member-id / ?as= / body actor (demo-actor.ts:76-78). middleware matcher does not cover /api.",
+      "exploitability": "Anyone who can reach a host left on replace_me_* keys is effectively owner of the demo org.",
+      "fix": "GET /api/health must return runtimeMode=production and demo=false on every public hostname. Alert on placeholder keys.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-A-002",
+      "title": "Decision-workflow RLS policies reference a non-existent members table",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "supabase/migrations/20260930000200_decision_workflow.sql"
+      ],
+      "evidence": "Policies at lines 176-244 use FROM members m. Repo has org_members only. No GRANT/REVOKE in that migration. No app .from('decision_*') found. P1_DECISION_WORKFLOW_ENABLED defaults OFF.",
+      "exploitability": "Low today (policy errors fail closed for authenticated). High if a members table is later created or the flag is turned on against PostgREST.",
+      "fix": "Rewrite policies onto org_members or drop them and REVOKE writes from anon/authenticated. Do not enable P1_DECISION_WORKFLOW_ENABLED until fixed.",
+      "flag_dependency": "P1_DECISION_WORKFLOW_ENABLED default OFF"
+    },
+    {
+      "id": "SP-A-003",
+      "title": "org_members write policy dropped but table-level writes not REVOKEd",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "supabase/schema.sql",
+        "supabase/migrations/20261004200000_org_members_capability_guard.sql"
+      ],
+      "evidence": "schema.sql:639-645 drops org_members_write_admin and documents server-only writes. Unlike #258 tables there is no REVOKE INSERT/UPDATE/DELETE/TRUNCATE from anon/authenticated.",
+      "exploitability": "Today RLS default-deny blocks session writes. A future permissive policy would silently reopen role/capability writes.",
+      "fix": "Add REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON org_members FROM anon, authenticated.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-A-004",
+      "title": "Many server-only tables have RLS ON but neither policies nor explicit REVOKE",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "supabase/migrations/20260918_cross_team_wake.sql",
+        "supabase/migrations/20261009100000_thread_single_flight.sql",
+        "supabase/migrations/20261004700000_comm_reply_dedup.sql"
+      ],
+      "evidence": "Pattern: ENABLE ROW LEVEL SECURITY + no policies + rely on Supabase default GRANTs (e.g. cross_team_wake_bindings, thread_send_leases, comm_reply_send_fingerprints). Newer tables (oauth_*, mcp_event_*, signup_attempts) do REVOKE ALL.",
+      "exploitability": "Writes fail while no policy exists. A later CREATE POLICY FOR ALL using (true) or is_org_member would reopen the table without a grant change.",
+      "fix": "Apply the #258 revoke pattern to every server-only table.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-002",
+      "title": "getApprovalByTelegramRef / getApprovalByTelegramMessageId take optional orgId",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "lib/data/approvals.ts"
+      ],
+      "evidence": "approvals.ts:593-643 add .eq('org_id') only when orgId is provided. Demo path documented as intentionally unscoped when orgId omitted (lib/data/p0-auth-idor.test.ts). Global Telegram is the known caller that omits it (SP-B-001).",
+      "exploitability": "Any new caller that omits orgId repeats cross-tenant read/action. Current Slack/LINE/[ref] callers pass channel.orgId.",
+      "fix": "Make orgId required in production builds or split a scoped helper from a legacy one.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-003",
+      "title": "Multi-org Auth users are pinned to the first org_members row",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "lib/auth/session.ts"
+      ],
+      "evidence": "getSessionContext loads one active membership: order('created_at').limit(1) (session.ts:147-158). No org switcher in the codebase.",
+      "exploitability": "User in Org A and Org B always acts as A. Wrong-tenant actions if they believe they are in B; not a cross-read of B via session IDs.",
+      "fix": "Explicit org selection cookie/claim, or reject a second membership until supported.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-006",
+      "title": "Approval statusToken is a cross-tenant bearer",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "app/api/approvals/status/route.ts",
+        "lib/data/approvals.ts",
+        "lib/approvals/tokens.ts"
+      ],
+      "evidence": "GET /api/approvals/status requires id+token only (status/route.ts:21-42). getApprovalStatusByToken loads by id via service role then timing-safe hash compare (approvals.ts:181-205). Token is st_ + 24 random bytes (~192 bits, tokens.ts:5-7).",
+      "exploitability": "Leaked pollUrl reads that ticket (any tenant). Entropy is adequate if URLs are not logged. Intentional design until Partner webhook exists.",
+      "fix": "Never log poll URLs. Optional org claim in the token. Short TTL.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-014",
+      "title": "SLACK_APPROVAL_STRICT defaults OFF so Slack buttons need no allowlist or voter binding",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "lib/feature-flags.ts"
+      ],
+      "evidence": "feature-flags.ts:29-42. When OFF, existing Slack approval behavior is preserved (no required allowedUserIds / voter_bindings, no team_id reject).",
+      "exploitability": "A Slack user who can press the button in a reachable message may approve without a binding, depending on channel config.",
+      "fix": "Enable SLACK_APPROVAL_STRICT in production after the existing rollout review.",
+      "flag_dependency": "SLACK_APPROVAL_STRICT default OFF"
+    },
+    {
+      "id": "SP-B-015",
+      "title": "ADMIN_APPROVER_POLICY_REQUIRED defaults OFF so admin-class tickets accept any single approver",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "lib/feature-flags.ts"
+      ],
+      "evidence": "feature-flags.ts:12-27. When OFF, W1 behavior is any single approver. When ON, missing admin-class route fails closed.",
+      "exploitability": "A business-route voter can clear admin-class tickets while the flag is OFF.",
+      "fix": "Enable ADMIN_APPROVER_POLICY_REQUIRED after confirming each tenant has an admin route.",
+      "flag_dependency": "ADMIN_APPROVER_POLICY_REQUIRED default OFF"
+    },
+    {
+      "id": "SP-C-001",
+      "title": "Legacy webhook fetch allows RFC1918/loopback/HTTP while WEBHOOK_HARDENING_ENABLED is OFF",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "lib/webhooks/link-local-guard.ts",
+        "lib/feature-flags.ts",
+        "lib/data/bindings.ts",
+        "lib/approvals/resolve-side-effects.ts"
+      ],
+      "evidence": "link-local-guard.ts:7-10 documents that flag-OFF only blocks link-local/metadata; loopback, other private ranges, http, any port, redirects unchanged. 169.254.169.254 is blocked. Wake URL is saved with trim only (bindings.ts:536-538).",
+      "exploitability": "Tenant admin (or stolen dashboard session) sets callbackUrl/wakeWebhookUrl → server-side POST to internal HTTP.",
+      "fix": "Set WEBHOOK_HARDENING_ENABLED=1 (docs/runbooks/webhook-hardening-d9-rollout-20261005.md). Validate URLs at save.",
+      "flag_dependency": "WEBHOOK_HARDENING_ENABLED default OFF"
+    },
+    {
+      "id": "SP-C-003",
+      "title": "Signup Layer 2 rate limits from #211 default OFF",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "lib/feature-flags.ts",
+        "lib/signup/attempts.ts",
+        "lib/auth/signup-guard.ts"
+      ],
+      "evidence": "PR #211: SIGNUP_ATTEMPT_LOG_ENABLED, SIGNUP_RATE_LIMIT_ENABLED, SIGNUP_DOMAIN_CHECK_ENABLED all default OFF. Layer 2 fail-open on DB errors. Unflagged Turnstile+honeypot remain fail-closed outside DEMO.",
+      "exploitability": "Turnstile bypass or farmed tokens can create orgs at scale; disposable domains accepted.",
+      "fix": "Enable the #211 trio after signup_attempts is applied. Consider SIGNUP_RATE_LIMIT_REQUIRED_ENABLED.",
+      "flag_dependency": "SIGNUP_* Layer 2 flags default OFF"
+    },
+    {
+      "id": "SP-C-004",
+      "title": "LOGIN_RATE_LIMIT_ENABLED defaults OFF (credential stuffing relies on Supabase only)",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "lib/feature-flags.ts",
+        "app/api/auth/login/route.ts",
+        "lib/auth/login-limits.ts"
+      ],
+      "evidence": "feature-flags.ts:508-516. login/route.ts:107-138 skips app buckets unless the flag is ON.",
+      "exploitability": "Password spraying limited only by Supabase Auth / network.",
+      "fix": "Enable LOGIN_RATE_LIMIT_ENABLED and set IP_HASH_KEY.",
+      "flag_dependency": "LOGIN_RATE_LIMIT_ENABLED default OFF"
+    },
+    {
+      "id": "SP-C-005",
+      "title": "LP inquiry has no Turnstile or rate limit while LP flags are OFF; mails a fixed ops inbox",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "app/api/lp/ai-employee/inquiry/route.ts",
+        "lib/feature-flags.ts"
+      ],
+      "evidence": "inquiry/route.ts:77-107 only applies rate limits when LP_INQUIRY_RATE_LIMIT_ENABLED or (bot protection AND client IP). Both flags default OFF (feature-flags.ts:230-345). Recipient is AI_EMP_INQUIRY_NOTIFY_EMAIL (fixed), not caller-chosen.",
+      "exploitability": "Unauthenticated flood of ops email / Resend quota. Not an open relay.",
+      "fix": "Enable LP_INQUIRY_BOT_PROTECTION_ENABLED, LP_INQUIRY_RATE_LIMIT_ENABLED, and IP_HASH_KEY.",
+      "flag_dependency": "LP_INQUIRY_BOT_PROTECTION_ENABLED and LP_INQUIRY_RATE_LIMIT_ENABLED default OFF"
+    },
+    {
+      "id": "SP-C-009",
+      "title": "MCP_OAUTH_ORG_ALLOWLIST_REQUIRED=false with an empty list opens OAuth to all orgs",
+      "severity": "medium",
+      "status": "needs_validation",
+      "files": [
+        "lib/mcp-oauth/config.ts",
+        "docs/runbooks/mcp-oauth-rollout-20261003.md"
+      ],
+      "evidence": "Allowlist-required defaults true (fail-closed empty list). Explicit false + empty list allows every org. Consent still binds grant to session.orgId.",
+      "exploitability": "Config mistake expands the OAuth surface. One tenant still cannot consent for another org's employee.",
+      "fix": "Keep the default true. Deploy check: if OAuth is ON, allowlist must be non-empty.",
+      "flag_dependency": "MCP_OAUTH_ENABLED default OFF; MCP_OAUTH_ORG_ALLOWLIST_REQUIRED default true"
+    },
+    {
+      "id": "SP-C-011",
+      "title": "LP chat treats user text as untrusted LLM input and can incur OpenAI cost when flags are ON",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "lib/lp/chat-prompt.ts",
+        "lib/lp/chat-turn.ts",
+        "app/api/chat/turn/route.ts"
+      ],
+      "evidence": "chat-prompt.ts documents user/history as untrusted. Production OpenAI calls in lib/ are LP chat. LP_CHAT_ENABLED / LP_CHAT_TOOLS_ENABLED / LP_JOURNEYS_ENABLED default OFF.",
+      "exploitability": "When flags ON: prompt injection against the LP assistant and token-cost abuse (mitigated by guest CSRF/Turnstile if those are also ON).",
+      "fix": "Keep chat flags OFF until bot protection and rate limits are ON. Pin model IDs (QUARTERLY-OPS-CHECKLIST Q-10).",
+      "flag_dependency": "LP_CHAT_ENABLED / LP_CHAT_TOOLS_ENABLED / LP_JOURNEYS_ENABLED default OFF"
+    },
+    {
+      "id": "SP-C-012",
+      "title": "P0_REPLY_POLICY_ENHANCED defaults OFF so reply recipients are not audience-validated",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "lib/feature-flags.ts"
+      ],
+      "evidence": "feature-flags.ts:121-135. When OFF, existing reply policy is preserved and recipient validation is not enforced.",
+      "exploitability": "An approved or auto path can send to a destination not on the employee audience, depending on the old policy.",
+      "fix": "Enable P0_REPLY_POLICY_ENHANCED for tenants that mail or post externally.",
+      "flag_dependency": "P0_REPLY_POLICY_ENHANCED default OFF"
+    },
+    {
+      "id": "SP-C-015",
+      "title": "Slack/LINE/Telegram wake text is untrusted input to the external employee model",
+      "severity": "medium",
+      "status": "confirmed",
+      "files": [
+        "lib/slack/mention-ingress.ts",
+        "lib/comm/line-ingress.ts",
+        "docs/guides/instructions-design.md"
+      ],
+      "evidence": "Channel text is forwarded to the external AI employee. In-app LLM is not used for scoring. Mitigations: approvals, secret detector, optional P1_TOPIC_GATED_POSTING_ENABLED (default OFF; when OFF all posts still need approval).",
+      "exploitability": "Indirect prompt injection against the employee. Staffpass cannot fully contain an external model; this is a product residual.",
+      "fix": "Keep sensitive tools behind approval. Treat wake payloads as untrusted in instructions. Enable topic gate only with fail-closed semantics understood.",
+      "flag_dependency": "P1_TOPIC_GATED_POSTING_ENABLED default OFF (OFF = all posts need approval)"
+    },
+    {
+      "id": "SP-A-005",
+      "title": "is_org_member / is_org_admin SECURITY DEFINER use search_path = public only",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "supabase/migrations/20260823_production_ready.sql"
+      ],
+      "evidence": "Lines 59-90. Later RPCs pin search_path to pg_catalog, public. These helpers are used by remaining SELECT policies.",
+      "exploitability": "Requires ability to create objects in public that shadow org_members — typically not available to anon/authenticated.",
+      "fix": "SET search_path = pg_catalog, public and schema-qualify org_members.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-004",
+      "title": "POST /api/employees/interpret is unauthenticated",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "app/api/employees/interpret/route.ts"
+      ],
+      "evidence": "POST handler (lines 12-26) has no session check. 1500-char cap. Secret-shaped input rejected. Deterministic rules engine, no LLM, no tenant data.",
+      "exploitability": "DoS and policy-schema recon. No data exfil.",
+      "fix": "Require a session or apply IP rate limits.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-005",
+      "title": "GET /api/health leaks runtimeMode and Stripe/Resend configured flags",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "app/api/health/route.ts",
+        "app/api/gateway/health/route.ts"
+      ],
+      "evidence": "health/route.ts:11-20 is a documented public cutover probe. gateway/health still returns runtimeMode when logged out (lines 12-22).",
+      "exploitability": "Recon only.",
+      "fix": "Accept for cutover or drop stripeConfigured/resendConfigured from the public body.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-007",
+      "title": "Notification webhook_ref and telegram_ref are 48-bit",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "lib/approvals/tokens.ts",
+        "supabase/schema.sql"
+      ],
+      "evidence": "generateTelegramRef uses 6 random bytes (tokens.ts:9-12). Notification webhook_ref is globally unique 12 hex chars. Slack/LINE still require signing secrets after lookup. LINE comm refs are 43 chars.",
+      "exploitability": "Guessing a ref alone does not forge Slack/LINE. Combined with SP-B-001 the short telegram_ref matters.",
+      "fix": "Lengthen new refs; monitor 404/401 on webhook paths.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-008",
+      "title": "oauth-purge cron compares CRON_SECRET with string equality",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "app/api/cron/oauth-purge/route.ts",
+        "lib/security/cron-secret.ts"
+      ],
+      "evidence": "oauth-purge/route.ts:18-21 uses authorization !== Bearer ${secret}. Other crons use rejectUnauthorizedCron (SHA-256 + timingSafeEqual, placeholder rejected).",
+      "exploitability": "Theoretical timing leak of CRON_SECRET on this one route.",
+      "fix": "Call rejectUnauthorizedCron.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-009",
+      "title": "Global Telegram webhook secret uses string equality",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "app/api/webhooks/telegram/route.ts"
+      ],
+      "evidence": "route.ts:362 compares x-telegram-bot-api-secret-token with !==.",
+      "exploitability": "Theoretical timing leak of TELEGRAM_WEBHOOK_SECRET.",
+      "fix": "Hash both sides and timingSafeEqual, same as cron-secret.ts.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-B-010",
+      "title": "Login CSRF same-origin check runs only when MCP_OAUTH_ENABLED",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "app/api/auth/login/route.ts"
+      ],
+      "evidence": "login/route.ts:64-67. Forgot-password and holds always check origin.",
+      "exploitability": "Cross-site POST login is mostly mitigated by SameSite cookies. Relevant if OAuth consent is later enabled without this guard staying on.",
+      "fix": "Always require same-origin on POST /api/auth/login.",
+      "flag_dependency": "MCP_OAUTH_ENABLED default OFF"
+    },
+    {
+      "id": "SP-B-011",
+      "title": "MCP CORS * and unauthenticated initialize return server identity",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "lib/mcp/employee-http.ts"
+      ],
+      "evidence": "corsHeaders sets Access-Control-Allow-Origin: * (employee-http.ts:54-59). initialize returns serverInfo/capabilities without a credential (lines 305-312). OAuth ON can 401 initialize unless legacy unauth initialize stays on.",
+      "exploitability": "Recon of server card. Tokens are Authorization headers, not cookies.",
+      "fix": "Document as accepted. Keep tokens out of query strings.",
+      "flag_dependency": "MCP_OAUTH_ENABLED / MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE"
+    },
+    {
+      "id": "SP-B-012",
+      "title": "Authenticated users without an org can auto-provision a trial org via repair-org",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "app/api/auth/repair-org/route.ts"
+      ],
+      "evidence": "GET/POST provision a trial org if the session user has no membership (invitees blocked). Intended recovery for orphaned Auth users.",
+      "exploitability": "A user who can create Auth accounts can mint empty trial orgs (signup Turnstile is the main brake).",
+      "fix": "Rate-limit repair-org; keep invite guard.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-C-002",
+      "title": "Wake/callback URLs are not validated at save time",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "lib/data/bindings.ts"
+      ],
+      "evidence": "updateWakeWebhook trims opts.url and stores it (bindings.ts:536-538). validateCallbackUrl exists for MCP Events transport only.",
+      "exploitability": "Enables SP-C-001. No extra privilege.",
+      "fix": "Reject non-https / non-public URLs at save, same rules as validateCallbackUrl.",
+      "flag_dependency": "Independent of WEBHOOK_HARDENING_ENABLED"
+    },
+    {
+      "id": "SP-C-006",
+      "title": "LP bot-protection flag ON without Turnstile keys fail-opens",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "app/api/lp/ai-employee/inquiry/route.ts",
+        "lib/lp/turnstile.ts"
+      ],
+      "evidence": "inquiry/route.ts:144-146 logs and proceeds if the flag is ON but Turnstile is not configured. Signup guard is fail-closed in the same situation.",
+      "exploitability": "Misconfiguration removes the CAPTCHA while operators believe it is on.",
+      "fix": "Fail closed (503) when the flag is ON and keys are missing.",
+      "flag_dependency": "LP_INQUIRY_BOT_PROTECTION_ENABLED"
+    },
+    {
+      "id": "SP-C-007",
+      "title": "Signup returns 409 email_exists (mailbox enumeration)",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "app/api/auth/signup/route.ts",
+        "lib/feature-flags.ts"
+      ],
+      "evidence": "signup/route.ts:392-406. feature-flags.ts:1071-1075: AUTH_ENUMERATION_HARDENING_ENABLED does not change this 409 (review option A).",
+      "exploitability": "Anyone can test whether an email is registered.",
+      "fix": "Unify conflict with a generic success/redirect if product accepts it (option B).",
+      "flag_dependency": "AUTH_ENUMERATION_HARDENING_ENABLED does not hide signup 409"
+    },
+    {
+      "id": "SP-C-008",
+      "title": "AUTH_ENUMERATION_HARDENING_ENABLED defaults OFF",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "lib/feature-flags.ts",
+        "app/api/auth/forgot-password/route.ts"
+      ],
+      "evidence": "feature-flags.ts:1059-1078. When OFF, forgot-password uses consume-before-send quotas (weaker oracle / quota burning).",
+      "exploitability": "Forgot-password quota burning and slightly stronger mailbox oracle.",
+      "fix": "Enable AUTH_ENUMERATION_HARDENING_ENABLED.",
+      "flag_dependency": "AUTH_ENUMERATION_HARDENING_ENABLED default OFF"
+    },
+    {
+      "id": "SP-C-013",
+      "title": "MCP_AUTH_FAILURE_AUDIT_ENABLED defaults OFF so mcp_auth_failures stays empty",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "lib/feature-flags.ts",
+        "supabase/migrations/20261016400000_mcp_auth_failures.sql"
+      ],
+      "evidence": "feature-flags.ts:943-949. Table and RPC exist; writes only when the flag is ON.",
+      "exploitability": "Credential spraying against /api/mcp is not recorded for quarterly review.",
+      "fix": "Enable MCP_AUTH_FAILURE_AUDIT_ENABLED.",
+      "flag_dependency": "MCP_AUTH_FAILURE_AUDIT_ENABLED default OFF"
+    },
+    {
+      "id": "SP-C-014",
+      "title": "Cron routes not listed in vercel.json remain callable with CRON_SECRET",
+      "severity": "low",
+      "status": "confirmed",
+      "files": [
+        "vercel.json",
+        "app/api/cron/lp-inquiry-cleanup/route.ts",
+        "app/api/cron/channel-classify-backfill/route.ts",
+        "app/api/cron/decision-t2-expiry/route.ts"
+      ],
+      "evidence": "vercel.json schedules a subset. Extra routes still authenticate with CRON_SECRET (some allow raw header forms).",
+      "exploitability": "Requires leaked CRON_SECRET. Then global cleanup/backfill can be triggered.",
+      "fix": "Keep secret rotation (Q-04). Optionally 404 unused cron routes unless an invoke header is present.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-O-001",
+      "title": "OAuth grant store revoke/touch/get filter by grant id only",
+      "severity": "low",
+      "status": "needs_validation",
+      "files": [
+        "lib/data/oauth.ts",
+        "lib/mcp-oauth/grant-admin.ts"
+      ],
+      "evidence": "Store helpers keyed by grant id. Dashboard DELETE goes through revokeEmployeeGrant which checks org. No HTTP route found that skips that check.",
+      "exploitability": "None on current HTTP paths. A future caller of revokeGrant(id) could revoke the wrong tenant grant.",
+      "fix": "Add .eq('org_id', orgId) on revoke/touch where the caller knows org.",
+      "flag_dependency": "MCP_OAUTH_ENABLED default OFF"
+    },
+    {
+      "id": "SP-A-006",
+      "title": "FORCE ROW LEVEL SECURITY is not used on any table",
+      "severity": "info",
+      "status": "confirmed",
+      "files": [
+        "supabase/schema.sql",
+        "supabase/migrations"
+      ],
+      "evidence": "No FORCE ROW LEVEL SECURITY in migrations or schema.sql. Table owners and service_role bypass RLS (standard Supabase).",
+      "exploitability": "N/A; documents the trust model. service_role compromise is total.",
+      "fix": "None required. Protect SUPABASE_SERVICE_ROLE_KEY (Q-04).",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-A-007",
+      "title": "All tenant writes use the service-role client; RLS is defense-in-depth",
+      "severity": "info",
+      "status": "confirmed",
+      "files": [
+        "lib/supabase.ts",
+        "lib/security/tenant-table-write-paths.test.ts",
+        "lib/security/tenant-config-write-paths.test.ts"
+      ],
+      "evidence": "createSupabaseAdminClient() is the write path. Tests pin zero user-session writers to tenant tables. Browser/SSR clients are auth + limited SELECTs.",
+      "exploitability": "N/A. Explains why SP-A-001 matters for PostgREST, not for app routes.",
+      "fix": "Keep the write-path tests. Apply #258-style revokes so PostgREST matches the app model.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-C-010",
+      "title": "POST /api/email and POST /api/trial are removed (404)",
+      "severity": "info",
+      "status": "confirmed",
+      "files": [
+        "lib/auth/p0-unauth-401.test.ts"
+      ],
+      "evidence": "No app/api/email or app/api/trial handlers. Tests at p0-unauth-401.test.ts:165-203 pin 404 and list the only three routes that import mail helpers (signup, LP inquiry, Stripe webhook). Recipients are own-signup, fixed ops inbox, or Stripe customer.",
+      "exploitability": "None — former open relay is gone. No other route lets callers pick arbitrary To:.",
+      "fix": "Keep the SEC1 tests.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-D-001",
+      "title": "middleware.ts does not match /api/*; each route must self-authenticate",
+      "severity": "info",
+      "status": "confirmed",
+      "files": [
+        "middleware.ts"
+      ],
+      "evidence": "matcher is /app, /admin, /login, /signup, /onboarding, /lp/ai-employee-corp (middleware.ts:95-97).",
+      "exploitability": "By design. New /api routes that forget requireOrgSession are unauthenticated.",
+      "fix": "Keep a CI/lint check that new route.ts files call an auth helper or are in an allowlist (health, webhooks, cron, public LP).",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-D-002",
+      "title": "No Next.js server actions ('use server') exist",
+      "severity": "info",
+      "status": "confirmed",
+      "files": [
+        "app",
+        "components"
+      ],
+      "evidence": "Repository-wide search for use server returned zero matches. Mutations go through app/api route handlers.",
+      "exploitability": "None. Smaller CSRF/action ID surface.",
+      "fix": "None.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-D-003",
+      "title": "No production hardcoded API keys or employee badges in app/lib",
+      "severity": "info",
+      "status": "rejected",
+      "files": [
+        "lib/security/secret-detector.ts"
+      ],
+      "evidence": "sk- / long gb_emp_ literals appear in tests and secret-detector fixtures only.",
+      "exploitability": "None found.",
+      "fix": "None.",
+      "flag_dependency": null
+    },
+    {
+      "id": "SP-D-004",
+      "title": "Employee MCP cannot escalate to admin MCP",
+      "severity": "info",
+      "status": "rejected",
+      "files": [
+        "lib/auth/admin-credential.ts",
+        "app/api/mcp/admin/route.ts"
+      ],
+      "evidence": "resolveAdminCredential returns employee_badge_rejected for gb_emp_ (admin-credential.ts:53-64). Employee tools use cred.orgId. Admin secrets are not returned on employee poll (docs/security-review-20260916.md R3/R8).",
+      "exploitability": "None as an escalation path.",
+      "fix": "None.",
+      "flag_dependency": null
+    }
+  ]
+}
