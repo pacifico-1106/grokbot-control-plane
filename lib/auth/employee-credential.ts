@@ -10,7 +10,7 @@ import {
   getEmployeeById,
 } from "@/lib/data";
 import { touchCredentialLastUsed } from "@/lib/data/credential-last-used";
-import { demoGetOverlapCredentialByHash } from "@/lib/data/credential-renewals";
+import { demoGetOverlapCredential, demoGetOverlapCredentialByHash, demoPutOverlapCredential } from "@/lib/data/credential-renewals";
 import {
   completeCredentialOverlapOnFirstAuth,
   overlapNewCredentialAllowed,
@@ -258,7 +258,8 @@ async function lookupDemoByHash(
  * Does not check binding executability — callers use assertExecutable separately.
  */
 export async function resolveEmployeeCredential(
-  req: Request
+  req: Request,
+  opts?: { touchLastUsed?: boolean }
 ): Promise<CredentialAuthResult> {
   const raw = extractEmployeeSecret(req);
   if (!raw) {
@@ -328,7 +329,15 @@ export async function resolveEmployeeCredential(
   const operable = await checkOperable({ orgId: resolved.orgId || employee.orgId, employeeId: resolved.employeeId, phase: "credential" });
   if (!operable.ok) return holdRefusal(operable.code);
 
-  void touchCredentialLastUsed(resolved.credentialId);
+  if (opts?.touchLastUsed !== false) {
+    void touchCredentialLastUsed(resolved.credentialId);
+    if (isDemoMode() && resolved.credentialId) {
+      const ov = demoGetOverlapCredential(resolved.credentialId);
+      if (ov && !ov.lastUsedAt) {
+        demoPutOverlapCredential({ ...ov, lastUsedAt: new Date().toISOString() });
+      }
+    }
+  }
   await completeCredentialOverlapOnFirstAuth({
     orgId: resolved.orgId,
     employeeId: resolved.employeeId,

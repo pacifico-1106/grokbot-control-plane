@@ -138,6 +138,8 @@ ADDITIVE = [
      "position('actor_email_from_member' in pg_get_functiondef("
      "'public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)'::regprocedure)) = 0"),
     # 緊急停止 hold (S1): table + 4 columns + 3 functions; rollback drops them all.
+    # 20261020300000 adds hold_state triggers; the loop rolls that child back
+    # first (same pattern as 20261014100000 before 20261013200000).
     ("20261012500000_", "tests/security/db-employee-holds.sql",
      "to_regclass('public.employee_holds') is null"
      " and to_regprocedure('public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)') is null"
@@ -169,6 +171,18 @@ ADDITIVE = [
      "to_regclass('public.mcp_auth_failures') is null"
      " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is null"
      " and to_regprocedure('public.touch_credential_last_used(uuid)') is null"),
+    # Review follow-up child first: restore 191/201/202 functions before those rollbacks.
+    ("20261020300000_", "tests/security/db-credential-auto-renew-review-followup.sql",
+     "to_regprocedure('public.abort_minted_credential_renewal(uuid,uuid,text,uuid)') is null"
+     " and to_regprocedure('public.block_claimable_credential_renewals_on_hold_apply(uuid,uuid)') is null"
+     " and to_regprocedure('public.block_claimable_credential_renewals_on_hold()') is null"
+     " and position('unused_new_revoked' in pg_get_functiondef("
+     "'public.revoke_expired_overlapped_old_credential(uuid,uuid,uuid,uuid,timestamptz)'::regprocedure)) = 0"
+     " and to_regprocedure('public.claim_credential_renewal_gen1_http(uuid,uuid,uuid,text,timestamptz)') is not null"),
+    # R8 child first: roll back gen1 claim RPC before R3/R1.
+    ("20261020200000_", "tests/security/db-credential-auto-renew-gen1.sql",
+     "to_regprocedure('public.claim_credential_renewal_gen1_http(uuid,uuid,uuid,text,timestamptz)') is null"
+     " and to_regprocedure('public.claim_credential_renewal(uuid,uuid,uuid,text,timestamptz)') is not null"),
     # R3 child first: roll back overlap RPCs before R1 drops credential_renewals.
     ("20261020100000_", "tests/security/db-credential-auto-renew-overlap.sql",
      "to_regprocedure('public.attach_overlapped_new_credential(uuid,uuid,text,uuid,timestamptz)') is null"
@@ -407,6 +421,12 @@ try:
                           " and to_regclass('public.comm_line_reply_tokens') is not null;")
             assert still == "t", f"{name}: refuse must leave parent and L-6 tables"
             sql_text(rollback_block((MIGRATIONS / child).read_text()), single=False)
+        if prefix.startswith("20261012500000_"):
+            # 20261020300000 adds AFTER UPDATE OF hold_state triggers. Drop
+            # those first; otherwise DROP COLUMN hold_state fails.
+            child = next((n for n in order if n.startswith("20261020300000_")), None)
+            assert child, "auto-renew review-followup child migration missing"
+            sql_text(rollback_block((MIGRATIONS / child).read_text()), single=False)
         sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False)
         if isinstance(tables, str):
             gone = query(f"select {tables};")
@@ -419,6 +439,9 @@ try:
         sql_file(MIGRATIONS / name)
         if prefix.startswith("20261013200000_"):
             child = next((n for n in order if n.startswith("20261014100000_")), None)
+            sql_file(MIGRATIONS / child)
+        if prefix.startswith("20261012500000_"):
+            child = next((n for n in order if n.startswith("20261020300000_")), None)
             sql_file(MIGRATIONS / child)
         sql_file(ROOT / test)
         dropped = "its RPC + column (previous state restored)" if isinstance(tables, str) else ", ".join(tables)

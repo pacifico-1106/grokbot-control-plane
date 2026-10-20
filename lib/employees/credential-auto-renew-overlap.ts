@@ -1,14 +1,17 @@
 /**
  * 社員証 auto-renew R3: issueCredentialOverlap + first-auth switchover + 24h cron.
  * Behind CREDENTIAL_AUTO_RENEW_ENABLED + org allowlist (default OFF).
- * Does not add gen1 HTTP (R8) or a boot script (R5). Never logs secret / claim_token.
+ * gen1 HTTP claim (R8) is a separate flag + route. No boot script (R5).
+ * Never logs secret / claim_token.
  */
 import { randomBytes } from "node:crypto";
 import { mintOneTimeSecret } from "@/lib/bindings";
 import { appendAuditEvent } from "@/lib/data/audit";
+import { getApprovalById } from "@/lib/data";
 import { getBinding } from "@/lib/data/bindings";
 import {
   claimCredentialRenewal,
+  claimCredentialRenewalGen1Http,
   completeOverlappedCredentialSwitchover,
   demoGetOverlapCredential,
   findClaimedOverlapByNewCredential,
@@ -19,6 +22,7 @@ import {
   revokeExpiredOverlappedOldCredential,
   getCredentialSecretHash,
 } from "@/lib/data/credential-renewals";
+import { assertTicketNotHeld, heldTicketMarker, HoldStopError } from "@/lib/safety/hold";
 import { credentialExpiresAtFromNow } from "@/lib/employees/credential-ttl";
 import {
   CREDENTIAL_AUTO_RENEW_OVERLAP_WINDOW_MS,
@@ -36,6 +40,8 @@ export type IssueCredentialOverlapResult =
       expiresAt: string;
       overlapUntil: string;
       secret: { raw: string; prefix: string; fingerprint: string };
+      renewalId: string;
+      abortToken: string;
     }
   | { ok: false; code: string; message: string };
 
@@ -69,6 +75,7 @@ export async function issueCredentialOverlap(input: {
   orgId: string;
   employeeId: string;
   oldCredentialId: string;
+  claimMode?: "gen1_http";
 }): Promise<IssueCredentialOverlapResult> {
   if (!isCredentialAutoRenewOnForOrg(input.orgId)) {
     return fail("feature_disabled", "社員証の自動更新は無効です（CREDENTIAL_AUTO_RENEW_ENABLED / 許可リスト）。");
@@ -100,6 +107,22 @@ export async function issueCredentialOverlap(input: {
     await auditDenied({ orgId: input.orgId, employeeId: gated.employee.id, code: "not_claimable" });
     return fail("not_claimable", "受け取り窓が開いていません。");
   }
+  const approval = await getApprovalById(open.approvalId, input.orgId);
+  if (!approval || approval.status !== "approved") {
+    await auditDenied({ orgId: input.orgId, employeeId: gated.employee.id, code: "not_claimable" });
+    return fail("not_claimable", "受け取り窓が開いていません。");
+  }
+  if (heldTicketMarker(approval.metadata)) {
+    await auditDenied({ orgId: input.orgId, employeeId: gated.employee.id, code: "approval_held" });
+    return fail("approval_held", "この更新は停止の対象になったため受け取れません。");
+  }
+  try {
+    assertTicketNotHeld(approval);
+  } catch (e) {
+    const code = e instanceof HoldStopError ? e.code : "approval_held";
+    await auditDenied({ orgId: input.orgId, employeeId: gated.employee.id, code });
+    return fail(code, "この更新は停止の対象になったため受け取れません。");
+  }
   const untilMs = open.claimableUntil ? Date.parse(open.claimableUntil) : NaN;
   if (!Number.isFinite(untilMs) || untilMs < Date.now()) {
     await auditDenied({ orgId: input.orgId, employeeId: gated.employee.id, code: "window_expired" });
@@ -110,7 +133,8 @@ export async function issueCredentialOverlap(input: {
   const at = new Date().toISOString();
   let claimed = false;
   try {
-    claimed = await claimCredentialRenewal({
+    const claim = input.claimMode === "gen1_http" ? claimCredentialRenewalGen1Http : claimCredentialRenewal;
+    claimed = await claim({
       id: open.id,
       orgId: input.orgId,
       employeeId: gated.employee.id,
@@ -167,7 +191,7 @@ export async function issueCredentialOverlap(input: {
         generation: minted.generation,
         newCredentialId: minted.newCredentialId,
         oldCredentialId: input.oldCredentialId,
-        mode: open.mode,
+        mode: input.claimMode ?? open.mode,
         secretHashPrefix: secret.fingerprint.slice(0, 12),
         overlapUntil,
       },
@@ -179,6 +203,8 @@ export async function issueCredentialOverlap(input: {
       expiresAt,
       overlapUntil,
       secret,
+      renewalId: open.id,
+      abortToken: token,
     };
   } catch {
     let cleanupFailed = false;
@@ -269,7 +295,7 @@ export async function expireOverlappedOldCredentials(now?: Date): Promise<{
     if (!row.newCredentialId) continue;
     if (!isCredentialAutoRenewOnForOrg(row.orgId)) continue;
     seen.add(row.orgId);
-    let outcome: "switched" | "expired" | null = null;
+    let outcome: "switched" | "expired" | "unused_new_revoked" | null = null;
     try {
       outcome = await revokeExpiredOverlappedOldCredential({
         renewalId: row.id,
@@ -282,6 +308,24 @@ export async function expireOverlappedOldCredentials(now?: Date): Promise<{
       outcome = null;
     }
     if (outcome === "expired") continue;
+    if (outcome === "unused_new_revoked") {
+      await appendAuditEvent({
+        orgId: row.orgId,
+        employeeId: row.employeeId,
+        credentialId: row.newCredentialId,
+        action: "credential.renew_claim_denied",
+        purpose: "admin.policy",
+        summary: "未使用の新社員証を失効（重ね置き期限）",
+        metadata: {
+          code: "unused_after_overlap",
+          reason: "unused_after_overlap",
+          oldCredentialId: row.oldCredentialId,
+          newCredentialId: row.newCredentialId,
+          renewalId: row.id,
+        },
+      }).catch(() => undefined);
+      continue;
+    }
     if (outcome !== "switched") {
       failed += 1;
       await appendAuditEvent({

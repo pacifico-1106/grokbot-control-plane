@@ -1166,8 +1166,8 @@ export function isOrgNameInputStrictEnabled(): boolean {
  * off / disabled opens the empty-list hatch. Org UUIDs stay in env, never
  * in source.
  *
- * R1 is schema + this gate only. Cron, Slack, HTTP claim, and MCP tools
- * come in later PRs behind the same flags.
+ * R1 is schema + this gate. R-now / R3 / R8 sit behind the same flags.
+ * R8 gen1 HTTP also requires CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED.
  */
 export function isCredentialAutoRenewEnabled(): boolean {
   return parseFlag(process.env.CREDENTIAL_AUTO_RENEW_ENABLED);
@@ -1183,4 +1183,15 @@ export function isCredentialAutoRenewEnabled(): boolean {
 export function isCredentialAutoRenewOrgAllowlistRequired(): boolean {
   const v = (process.env.CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST_REQUIRED || "").trim().toLowerCase();
   return !(v === "0" || v === "false" || v === "off" || v === "disabled");
+}
+
+/**
+ * CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED (default OFF). R8: one-time
+ * POST /api/mcp/employee/credential/claim for an already-approved window.
+ * OFF → 404, no table touch. Still requires CREDENTIAL_AUTO_RENEW_ENABLED
+ * plus the org allowlist. Not an MCP tool. Response may contain a plaintext
+ * 社員証; callers must not log it.
+ */
+export function isCredentialAutoRenewGen1HttpEnabled(): boolean {
+  return parseFlag(process.env.CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED);
 }

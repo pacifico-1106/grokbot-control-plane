@@ -141,6 +141,11 @@ end $$;
 update public.credential_renewals
    set overlap_until = now() - interval '1 second'
  where id = 'cb400000-0000-4000-8000-000000000001';
+-- After 20261020300000, an unused new badge is revoked instead of
+-- switching. This case pins used-new switchover while held.
+update public.credentials
+   set last_used_at = now()
+ where id = 'cb200000-0000-4000-8000-000000000011';
 
 -- (4) hold does not block the timeout revoke
 select public.start_employee_hold(

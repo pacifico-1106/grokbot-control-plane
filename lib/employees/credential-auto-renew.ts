@@ -1,6 +1,6 @@
 /**
  * 社員証 auto-renew (R1 flags + R-now 今すぐ更新 + R3 overlap helpers).
- * Default OFF, fail-closed. No gen1 HTTP, no boot script.
+ * Default OFF, fail-closed. gen1 HTTP is R8 (separate flag). No boot script.
  *
  * Org UUIDs belong in CREDENTIAL_AUTO_RENEW_ORG_ALLOWLIST only — never in code.
  * Never log or return 社員証 secret, prefix, hash, public key, or claim_token.
