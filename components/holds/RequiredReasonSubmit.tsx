@@ -2,8 +2,8 @@
 
 /**
  * Shared required-reason submit for hold release (employee / org / leave all
- * render HoldPanel). Empty or whitespace-only reason keeps the button disabled
- * and shows 理由を入力してください — a blank press used to do nothing.
+ * render HoldPanel). Empty, whitespace-only, or invisible-control-only reason
+ * keeps the button disabled and shows 理由を入力してください.
  */
 import { REQUIRED_REASON_HINT_JA, hasRequiredReason } from "@/lib/safety/required-reason";
 
