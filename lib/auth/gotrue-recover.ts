@@ -30,7 +30,7 @@ export function isGoTrueRecoverPreSendError(
 ): boolean {
   const code = error?.code;
   if (typeof code !== "string" || !PRE_SEND.has(code)) return false;
-  const status = error.status;
+  const status = error?.status;
   if (typeof status === "number" && (status < 400 || status >= 500)) return false;
   return true;
 }
