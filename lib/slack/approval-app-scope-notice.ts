@@ -24,6 +24,7 @@
  * imports the flag + sets from here).
  */
 import type { NotificationChannelRuntime } from "@/lib/data/notification-channels";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 function parseFlag(value: string | undefined): boolean {
   const v = (value ?? "").trim().toLowerCase();
@@ -231,7 +232,7 @@ export async function notifyApprovalAppFixRequired(input: {
     const text = isScope
       ? buildApprovalAppScopeNoticeJa({ scope, apiAppId, approvalId, tool })
       : buildApprovalAppFixNoticeJa({ code: fixCode, inboxId, approvalId, tool });
-    const [{ getApprovalById, appendAuditEvent }, { listMembers }, { getEnabledNotificationChannels }] = await Promise.all([
+    const [{ getApprovalById }, { listMembers }, { getEnabledNotificationChannels }] = await Promise.all([
       import("@/lib/data"),
       import("@/lib/data/members"),
       import("@/lib/data/notification-channels"),
@@ -283,7 +284,11 @@ export async function notifyApprovalAppFixRequired(input: {
       if (sent.ok) result.channels += 1;
     }
 
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({
+        orgId,
+        fallbackHuman: { email: "slack_approval_app_notice" },
+      }),
       orgId,
       employeeId: null,
       credentialId: null,

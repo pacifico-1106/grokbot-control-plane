@@ -26,7 +26,12 @@ export default async function GettingStartedPage() {
           <p className="mt-2 text-sm muted leading-relaxed">会社名とメールで Staffpass に入ります。</p>
         </section>
 
-        <AdminMcpConnect connected={connected} grokBotAgentId={adminAgent?.grokBotAgentId ?? null} canIssue={canIssue} />
+        <AdminMcpConnect
+          connected={connected}
+          grokBotAgentId={adminAgent?.grokBotAgentId ?? null}
+          canIssue={canIssue}
+          canRevoke={session.demo || session.member?.role === "owner"}
+        />
 
         <section className="surface p-5 space-y-3" id="process-source">
           <p className="text-xs faint font-mono">STEP 03</p>

@@ -34,7 +34,8 @@ export type PreSendResult =
         | "counterparty_link_unavailable"
         | "employee_on_hold"
         | "org_on_hold"
-        | "hold_state_unavailable";
+        | "hold_state_unavailable"
+        | "employee_terminated";
     };
 
 type AccountLike = { id: string; orgId: string; employeeId: string; status: string } | null;

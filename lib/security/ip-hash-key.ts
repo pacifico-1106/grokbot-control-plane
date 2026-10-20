@@ -7,6 +7,7 @@
  * hashes reversible by brute force over the IPv4 space, so a missing, blank or placeholder key
  * throws IpHashKeyMissingError and callers answer 503 before writing anything.
  */
+import { createHmac } from "node:crypto";
 
 export const IP_HASH_KEY_ENV = "IP_HASH_KEY";
 export const IP_HASH_KEY_MISSING_CODE = "ip_hash_key_missing";
@@ -50,4 +51,9 @@ export function requireIpHashKey(): string {
   const key = process.env[IP_HASH_KEY_ENV];
   if (!usable(key)) throw new IpHashKeyMissingError();
   return key;
+}
+
+/** HMAC-SHA256(IP_HASH_KEY, value). Never log the raw input; callers may log a short prefix of this. */
+export function hmacWithIpHashKey(value: string, length = 32): string {
+  return createHmac("sha256", requireIpHashKey()).update(value).digest("hex").slice(0, length);
 }

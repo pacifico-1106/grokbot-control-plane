@@ -17,6 +17,16 @@ import { sendTrialStartedEmail, sendWelcomeEmail } from "@/lib/email";
 import { getClientIp, getTurnstileConfig, verifyTurnstileToken } from "@/lib/lp/turnstile";
 import { isDemoMode } from "@/lib/mode";
 import { isIpHashKeyConfigured } from "@/lib/security/ip-hash-key";
+import { isSupabaseAuthCaptchaEnabled } from "@/lib/feature-flags";
+import {
+  ACCOUNT_CREATED_LOGIN_REQUIRED_MESSAGE,
+  loginFailureSearchParams,
+} from "@/lib/auth/login-errors";
+import {
+  evaluateSupabaseAuthCaptcha,
+  passwordSignInCredentials,
+  readAuthCaptchaFields,
+} from "@/lib/auth/supabase-auth-captcha";
 import { TRIAL_DAYS } from "@/lib/stripe";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
@@ -24,7 +34,7 @@ import { jsonUtf8 } from "@/lib/http/json-utf8";
 
 export const runtime = "nodejs";
 
-async function establishSession(email: string, password: string) {
+async function establishSession(email: string, password: string, captchaToken?: string) {
   const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -46,7 +56,7 @@ async function establishSession(email: string, password: string) {
       },
     }
   );
-  return supabase.auth.signInWithPassword({ email, password });
+  return supabase.auth.signInWithPassword(passwordSignInCredentials(email, password, captchaToken));
 }
 
 /**
@@ -69,6 +79,7 @@ export async function POST(req: Request) {
   let legalAgreement = false;
   let honeypot = "";
   let turnstileToken = "";
+  let supabaseCaptchaToken = "";
 
   if (contentType.includes("application/json")) {
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
@@ -84,9 +95,9 @@ export async function POST(req: Request) {
       body.legalAgreement === "accepted" ||
       body.legalAgreement === true;
     honeypot = String(body[SIGNUP_HONEYPOT_FIELD] || "");
-    turnstileToken = String(
-      body.turnstileToken || body["cf-turnstile-response"] || ""
-    );
+    const captchaFields = readAuthCaptchaFields(body);
+    turnstileToken = captchaFields.localToken;
+    supabaseCaptchaToken = captchaFields.supabaseToken;
   } else {
     const form = await req.formData();
     orgName = String(form.get("orgName") || "").trim();
@@ -99,7 +110,9 @@ export async function POST(req: Request) {
     ).trim();
     legalAgreement = form.get("legal_agreement") === "accepted";
     honeypot = String(form.get(SIGNUP_HONEYPOT_FIELD) || "");
-    turnstileToken = String(form.get("cf-turnstile-response") || "");
+    const captchaFields = readAuthCaptchaFields(form);
+    turnstileToken = captchaFields.localToken;
+    supabaseCaptchaToken = captchaFields.supabaseToken;
   }
 
   if (!legalAgreement) {
@@ -140,6 +153,26 @@ export async function POST(req: Request) {
   const attemptStore = anySignupLayer2Enabled() ? createSupabaseSignupAttemptStore() : null;
   const fingerprint = fingerprintSignup(req, email);
 
+  const supabaseCaptcha = evaluateSupabaseAuthCaptcha({
+    enabled: isSupabaseAuthCaptchaEnabled() && !isDemoMode(),
+    localToken: turnstileToken,
+    supabaseToken: supabaseCaptchaToken,
+    localTokenSiteverified: true,
+  });
+  if (!supabaseCaptcha.ok) {
+    await recordSignupAttempt(attemptStore, fingerprint, "rejected_guard", {
+      reason: supabaseCaptcha.error,
+    });
+    return rejectToForm(
+      supabaseCaptcha.error,
+      supabaseCaptcha.error === "turnstile_required" ? 400 : 403,
+      supabaseCaptcha.error === "turnstile_required"
+        ? "ロボットでないことの確認を完了してください"
+        : "確認に失敗しました。ページを再読み込みしてもう一度お試しください。"
+    );
+  }
+  const unusedSupabaseCaptchaToken = supabaseCaptcha.captchaToken;
+
   // Bot protection runs before any Auth user / org / email side effect.
   // Not behind a flag (P0 hotfix spam-sample-20261003); Turnstile fail-closed outside DEMO.
   const guard = await evaluateSignupGuard(
@@ -173,7 +206,12 @@ export async function POST(req: Request) {
       reason: layer2.reason,
       turnstileOk: isDemoMode() ? null : true,
     });
-    const code = layer2.outcome === "rejected_domain" ? layer2.reason : layer2.outcome;
+    const code =
+      layer2.reason === "store_unavailable" || layer2.reason === "ip_unavailable"
+        ? "signup_unavailable"
+        : layer2.outcome === "rejected_domain"
+          ? layer2.reason
+          : layer2.outcome;
     return rejectToForm(code, layer2.status, layer2.message);
   }
 
@@ -199,10 +237,37 @@ export async function POST(req: Request) {
 
   const integrationMode = mode === "byo" ? "byo" : "managed";
 
-  async function finishOk(orgId: string) {
-    await establishSession(email, password);
-    await sendWelcomeEmail(email, orgName || "新しい組織");
-    await sendTrialStartedEmail(email, TRIAL_DAYS);
+  async function finishOk(orgId: string, allowMail = true) {
+    const { error: signErr } = await establishSession(
+      email,
+      password,
+      unusedSupabaseCaptchaToken
+    );
+    // Flag ON: a failed post-create sign-in (captcha_failed, etc.) must not
+    // look like success or send welcome/trial mail. Flag OFF: ignore the
+    // result, same as main.
+    if (isSupabaseAuthCaptchaEnabled() && signErr) {
+      console.warn("[signup] post-create sign-in failed; account exists");
+      if (contentType.includes("application/json")) {
+        return jsonUtf8(
+          {
+            error: "account_created_login_required",
+            message: ACCOUNT_CREATED_LOGIN_REQUIRED_MESSAGE,
+          },
+          { status: 401 }
+        );
+      }
+      const login = new URL("/login", req.url);
+      login.search = loginFailureSearchParams({
+        code: "account_created_login_required",
+        email,
+      });
+      return NextResponse.redirect(login, 303);
+    }
+    if (allowMail) {
+      await sendWelcomeEmail(email, orgName || "新しい組織");
+      await sendTrialStartedEmail(email, TRIAL_DAYS);
+    }
 
     if (contentType.includes("application/json")) {
       return jsonUtf8({ ok: true, orgId, demo: false });
@@ -214,7 +279,11 @@ export async function POST(req: Request) {
 
   /** Auth-only user: sign in + create org (idempotent). */
   async function recoverOrphanedAuthUser(): Promise<NextResponse | null> {
-    const { error: signErr, data } = await establishSession(email, password);
+    const { error: signErr, data } = await establishSession(
+      email,
+      password,
+      unusedSupabaseCaptchaToken
+    );
     if (signErr || !data.user) {
       return null;
     }
@@ -227,8 +296,15 @@ export async function POST(req: Request) {
         displayName: displayName || undefined,
         referralCode: referralCode || null,
       });
-      await sendWelcomeEmail(email, orgName || "新しい組織");
-      await sendTrialStartedEmail(email, TRIAL_DAYS);
+      const recoveredRecord = await recordSignupAttempt(attemptStore, fingerprint, "created", {
+        turnstileOk: isDemoMode() ? null : true,
+        orgId: provisioned.orgId,
+        userId: data.user.id,
+      });
+      if (recoveredRecord.ok) {
+        await sendWelcomeEmail(email, orgName || "新しい組織");
+        await sendTrialStartedEmail(email, TRIAL_DAYS);
+      }
       if (contentType.includes("application/json")) {
         return jsonUtf8({
           ok: true,
@@ -270,12 +346,12 @@ export async function POST(req: Request) {
       displayName: displayName || undefined,
       referralCode: referralCode || null,
     });
-    await recordSignupAttempt(attemptStore, fingerprint, "created", {
+    const recorded = await recordSignupAttempt(attemptStore, fingerprint, "created", {
       turnstileOk: isDemoMode() ? null : true,
       orgId,
       userId,
     });
-    return await finishOk(orgId);
+    return await finishOk(orgId, recorded.ok);
   } catch (e) {
     const message = e instanceof Error ? e.message : "signup_failed";
     await recordSignupAttempt(attemptStore, fingerprint, "error", {
@@ -299,7 +375,7 @@ export async function POST(req: Request) {
         );
       }
       // Establish session if possible so /onboarding repair works.
-      await establishSession(email, password).catch(() => null);
+      await establishSession(email, password, unusedSupabaseCaptchaToken).catch(() => null);
       const url = new URL("/onboarding", req.url);
       url.searchParams.set(
         "reason",

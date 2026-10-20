@@ -15,6 +15,7 @@ const ACTION_LABEL: Record<string, string> = {
   "admin.parties": "相手台帳",
   "admin.channel": "チャネル",
   "admin.link": "連携",
+  "admin.revoke": "失効",
   "admin.role": "職務案",
   "credential.issued": "雇用",
   "credential.rotated": "再発行",

@@ -104,7 +104,7 @@ export function buildMcpHandoff(input: {
       },
       {
         id: "attach_badge",
-        ja: "認証ヘッダー Authorization: Bearer に、この AI 社員用に発行済みの社員証（gb_emp_…）を設定する。社員証はこの情報には含まれない。チャットに貼らない。",
+        ja: "認証ヘッダー Authorization: Bearer に、この AI 社員用に発行済みの社員証（gb_emp_…）を静的な値として設定する。${env:…} の展開は使わない。社員証はこの情報には含まれない。チャットに貼らない。",
       },
       {
         id: "verify",

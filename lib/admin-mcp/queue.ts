@@ -11,7 +11,8 @@
  */
 import { sendApprovalNeededEmail } from "@/lib/email";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
-import { appendAuditEvent, createApproval } from "@/lib/data";
+import { adminAgentAuditActor, appendAdminAuditEvent } from "@/lib/audit/admin-audit";
+import { createApproval } from "@/lib/data";
 import { getOrgOwnerIds } from "@/lib/data/members";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { auditActionForAdminTool, ADMIN_AUDIT_CLASS, isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
@@ -158,13 +159,14 @@ export async function queueAdminTool(input: {
     );
 
     if (!policyCheck.ok) {
-      await appendAuditEvent({
+      await appendAdminAuditEvent({
         orgId: input.cred.orgId,
         employeeId: null,
         credentialId: null,
         action: "admin.policy",
         purpose: auditActionForAdminTool(input.tool),
         summary: `管理クラス承認拒否（承認者未設定）: ${input.tool}`,
+        actor: adminAgentAuditActor(input.cred.adminAgentId || input.cred.actorId, input.cred.generation),
         metadata: {
           tool: input.tool,
           code: policyCheck.code,
@@ -213,13 +215,14 @@ export async function queueAdminTool(input: {
     metadata: { adminMutation: input.args, adminRequester: requester, ...requesterExtra },
   });
   if (authorityStop) {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
       orgId: input.cred.orgId,
       employeeId: null,
       credentialId: null,
       action: "admin.policy",
       purpose: auditAction,
       summary: `承認者権限により申請を停止: ${input.tool}`,
+      actor: adminAgentAuditActor(input.cred.adminAgentId || input.cred.actorId, input.cred.generation),
       metadata: {
         tool: input.tool,
         code: authorityStop.reason,
@@ -261,13 +264,14 @@ export async function queueAdminTool(input: {
     },
   });
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: input.cred.orgId,
     employeeId: null,
     credentialId: null,
     action: auditAction,
     purpose: auditAction,
     summary: `承認待ち: ${title}`,
+    actor: adminAgentAuditActor(input.cred.adminAgentId || input.cred.actorId, input.cred.generation),
     metadata: {
       approvalId: created.approval.id,
       tool: input.tool,
@@ -280,7 +284,10 @@ export async function queueAdminTool(input: {
     process.env.BILLING_NOTIFY_EMAIL ||
     process.env.APPROVAL_NOTIFY_EMAIL ||
     "owner@example.com";
-  void sendApprovalNeededEmail(notifyTo, created.approval.summary, "high").catch(
+  void sendApprovalNeededEmail(notifyTo, created.approval.summary, "high", {
+    kind: input.tool,
+    id: created.approval.id,
+  }).catch(
     () => null
   );
   void sendApprovalNotifications(created.approval, null).catch(() => null);

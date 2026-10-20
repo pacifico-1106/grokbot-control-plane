@@ -158,8 +158,11 @@ describe("orgs.issueAdminCredential admin MCP", () => {
     expect(fulfillAudit?.metadata).toMatchObject({
       auditClass: "admin",
       targetOrgId: TARGET_ORG_ID,
-      secretPrefix: fulfillment?.secretPrefix,
     });
+    expect(fulfillAudit?.metadata?.actorKind).toBe("admin_agent");
+    expect(fulfillAudit?.metadata?.adminAgentId).toBeTruthy();
+    expect(typeof fulfillAudit?.metadata?.generation).toBe("number");
+    expect(fulfillAudit?.metadata?.secretPrefix).toBeUndefined();
   });
 
   test("platformIssueAdminCredential mints for target org not caller org", async () => {

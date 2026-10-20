@@ -553,6 +553,12 @@ describe("trigger wiring: human-approved parties.upsert fulfillment", () => {
         approvalClass: "admin",
         adminTool: "parties.upsert",
         adminMutation: { kind: "slack_user", identifier: String(cp.id), audience: "internal" },
+        adminRequester: {
+          kind: "admin_agent",
+          actorId: "adm_dm_autoroute",
+          grokBotAgentId: "grok_dm_autoroute",
+          credentialGeneration: 1,
+        },
       },
     }) as unknown as import("@/lib/types").ApprovalRequest;
     delete process.env.SLACK_DM_AUTOROUTE_ENABLED;

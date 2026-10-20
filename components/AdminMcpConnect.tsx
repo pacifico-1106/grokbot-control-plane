@@ -10,18 +10,22 @@ export function AdminMcpConnect({
   grokBotAgentId,
   embedded = false,
   canIssue = true,
+  canRevoke = false,
 }: {
   connected: boolean;
   grokBotAgentId: string | null;
   embedded?: boolean;
   /** owner/admin + hire_issue_credentials (server is authoritative). */
   canIssue?: boolean;
+  /** owner only (server is authoritative). */
+  canRevoke?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
   const [agentId, setAgentId] = useState(grokBotAgentId || "");
   const [message, setMessage] = useState("");
   const [isConnected, setConnected] = useState(connected);
+  const [reason, setReason] = useState("");
 
   async function issue() {
     setBusy(true);
@@ -34,6 +38,33 @@ export function AdminMcpConnect({
       setMessage(body.credential?.noticeJa || "管理MCPの認証を発行しました");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "発行に失敗しました");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke() {
+    if (
+      !window.confirm(
+        "管理用の認証を失効します。既存の gb_adm_ は使えなくなります。よろしいですか？"
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const res = await fetch("/api/admin-mcp/revoke", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason: reason.trim() || undefined }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.message || "失効に失敗しました");
+      setSecret(null);
+      setMessage(body.alreadyRevoked ? "管理用の認証は既に失効しています" : "管理用の認証を失効しました");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "失効に失敗しました");
     } finally {
       setBusy(false);
     }
@@ -92,6 +123,25 @@ export function AdminMcpConnect({
       {!canIssue ? (
         <p role="note" className="text-xs muted">{CREDENTIAL_ADMIN_REQUIRED_MESSAGE_JA}</p>
       ) : null}
+      <label className="block text-sm">
+        <span className="muted">失効の理由（任意）</span>
+        <input
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-sm"
+          placeholder="例: キーが漏れた"
+          disabled={busy || !canRevoke}
+        />
+      </label>
+      <button
+        type="button"
+        className="btn btn-ghost text-sm"
+        disabled={busy || !canRevoke}
+        title={canRevoke ? undefined : "失効はオーナーのみ"}
+        onClick={() => void revoke()}
+      >
+        {!canRevoke ? "失効はオーナーのみ" : busy ? "処理中…" : "管理用の認証を失効"}
+      </button>
       {secret ? (
         <div className="space-y-1">
           <p className="text-xs muted">一度だけ表示（ログに残しません）</p>

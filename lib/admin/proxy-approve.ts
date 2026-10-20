@@ -1,4 +1,5 @@
 import { assertNotSelfApproval, isSelfApprovalDenied, type ApprovalResolver } from "@/lib/admin-mcp/self-approval";
+import { appendAdminAuditEvent, humanAdminActor } from "@/lib/audit/admin-audit";
 /**
  * Platform-ops proxy approval: Super Admin resolves a tenant's pending approval
  * on their behalf during setup/support. Requires mandate (setup|support) for audit.
@@ -10,7 +11,6 @@ import { assertNotSelfApproval, isSelfApprovalDenied, type ApprovalResolver } fr
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import { fulfillApprovedInvoke } from "@/lib/approvals/fulfill";
 import { runApprovalResolveSideEffects } from "@/lib/approvals/resolve-side-effects";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { isDemoMode } from "@/lib/mode";
 import { mapApprovalRow } from "@/lib/data/mappers";
@@ -155,8 +155,9 @@ export async function proxyResolveApproval(
   const notePart = note ? ` / メモ: ${note}` : "";
   
   const auditAction: AuditAction = "admin.proxy_approve";
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
     orgId: targetOrgId,
+    actor: humanAdminActor(actor.email),
     employeeId: updated.employeeId,
     credentialId: updated.credentialId,
     actorEmail: actor.email,

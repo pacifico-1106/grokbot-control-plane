@@ -35,7 +35,6 @@ import {
 } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { probeSlackTokenScopes, rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
-import { appendAuditEvent } from "@/lib/data/audit";
 import { getBinding } from "@/lib/data/bindings";
 import { getEmployee } from "@/lib/data/employees";
 import { getEmployeeSlackIdentity, getLinkedSlackUserToken } from "@/lib/data/slack-identities";
@@ -51,6 +50,7 @@ import {
 } from "@/lib/employees/posting-identity";
 import { isSlackAuthorizeLinkEnabled } from "@/lib/slack/authorize-link-flags";
 import type { ApprovalRequest, Employee, PostingAs } from "@/lib/types";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 export const POSTING_IDENTITY_SET_TOOL = "employees.postingIdentity.set" as const;
 export const POSTING_IDENTITY_ALLOWED_ARGS = ["employeeId", "postingAs", "jobId", "approvalId"] as const;
@@ -272,7 +272,8 @@ export async function fulfillPostingIdentityChange(
     employee: Employee | null,
     extra: { nextStepJa?: string; from?: PostingAs } = {}
   ): Promise<PostingIdentityFulfillment> => {
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       orgId,
       employeeId: employee?.id ?? null,
       credentialId: null,
@@ -323,7 +324,8 @@ export async function fulfillPostingIdentityChange(
   };
   if (from === to) {
     // Switched meanwhile (e.g. on the dashboard): idempotent, no second write.
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
+      actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
       orgId,
       employeeId: employee.id,
       credentialId: null,
@@ -361,7 +363,8 @@ export async function fulfillPostingIdentityChange(
   }
   if (!updated) return failWith(NOT_FOUND.code, NOT_FOUND.message, null);
 
-  await appendAuditEvent({
+  await appendAdminAuditEvent({
+    actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
     orgId,
     employeeId: employee.id,
     credentialId: updated.credentialId ?? null,

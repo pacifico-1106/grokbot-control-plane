@@ -3,6 +3,8 @@
  * Feature flag LP_INQUIRY_BOT_PROTECTION_ENABLED must be ON.
  */
 
+import { trustedClientIp } from "@/lib/security/client-ip";
+
 const TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
 export interface TurnstileVerifyResult {
@@ -88,18 +90,7 @@ export async function verifyTurnstileToken(
   }
 }
 
+/** Same trusted-header order as signup Layer 2. Never reads cf-connecting-ip. */
 export function getClientIp(request: Request): string | undefined {
-  const cfConnectingIp = request.headers.get("cf-connecting-ip");
-  if (cfConnectingIp) return cfConnectingIp;
-  
-  const xForwardedFor = request.headers.get("x-forwarded-for");
-  if (xForwardedFor) {
-    const firstIp = xForwardedFor.split(",")[0]?.trim();
-    if (firstIp) return firstIp;
-  }
-  
-  const xRealIp = request.headers.get("x-real-ip");
-  if (xRealIp) return xRealIp;
-  
-  return undefined;
+  return trustedClientIp(request) ?? undefined;
 }

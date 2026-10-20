@@ -36,7 +36,7 @@ const prm = await import("@/app/api/oauth/meta/protected-resource/route");
 const asm = await import("@/app/api/oauth/meta/authorization-server/route");
 
 let store = freshStore();
-const ENV = ["MCP_OAUTH_ENABLED", "MCP_OAUTH_DCR_ENABLED", "MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE", "MCP_OAUTH_ISSUER", "MCP_OAUTH_ORG_ALLOWLIST", "MCP_OAUTH_ORG_ALLOWLIST_REQUIRED"];
+const ENV = ["MCP_OAUTH_ENABLED", "MCP_OAUTH_DCR_ENABLED", "MCP_OAUTH_LEGACY_UNAUTH_INITIALIZE", "MCP_OAUTH_ISSUER", "MCP_OAUTH_ORG_ALLOWLIST", "MCP_OAUTH_ORG_ALLOWLIST_REQUIRED", "MCP_EMPLOYEE_BADGE_MCP_ENABLED"];
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
   for (const k of ENV) (saved[k] = process.env[k]), delete process.env[k];

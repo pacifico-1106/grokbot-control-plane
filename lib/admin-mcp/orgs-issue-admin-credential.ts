@@ -3,10 +3,13 @@
  * Caller cred stays on platform ops org; issued credential scopes to targetOrgId.
  */
 import type { PlatformOpsActor } from "@/lib/admin/platform-ops-gate";
+import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { getOrgMeta } from "@/lib/data/org-context";
 import { issueOrgAdminAgent, mintAdminSecret } from "@/lib/data/admin-agents";
 import { isDemoMode } from "@/lib/mode";
 import { ADMIN_CREDENTIAL_PREFIX } from "@/lib/mcp/admin-public";
+import type { ApprovalRequest } from "@/lib/types";
 
 export type OrgIssueAdminCredentialInput = {
   targetOrgId: string;
@@ -99,4 +102,28 @@ export async function fulfillOrgIssueAdminCredentialFromQueuedArgs(
     throw new Error(parsed.code);
   }
   return platformIssueAdminCredential(parsed.value.targetOrgId, actor);
+}
+
+export async function auditOrgIssueAdminCredential(input: {
+  approval: ApprovalRequest;
+  issued: OrgIssueAdminCredentialSuccess;
+  actor: PlatformOpsActor;
+}): Promise<void> {
+  await appendAdminAuditEvent({
+    orgId: input.approval.orgId,
+    employeeId: null,
+    credentialId: input.issued.adminAgentId,
+    action: "admin.issue_admin_credential",
+    purpose: "admin.issue_admin_credential",
+    summary: input.issued.summaryJa,
+    actor: await resolveAdminAuditActor({ approval: input.approval, orgId: input.approval.orgId }),
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalId: input.approval.id,
+      targetOrgId: input.issued.targetOrgId,
+      issuedGeneration: input.issued.credentialGeneration,
+      actorEmail: input.actor.email,
+      actorUserId: input.actor.userId,
+    },
+  });
 }

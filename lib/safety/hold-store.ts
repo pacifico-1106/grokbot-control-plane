@@ -273,10 +273,15 @@ const demoStore: HoldStore = {
       }
     }
     // Audit first; if it fails nothing below happens (S1 does both in one transaction).
+    // actorEmail comes from the approver's member row — never from caller metadata.
+    const { actorEmail: _forgeEmail, actor_email: _forgeSnake, approverEmail: _forgeApprover, ...callerMeta } =
+      input.auditMetadata;
+    void _forgeEmail; void _forgeSnake; void _forgeApprover;
     await appendAuditEvent({
       orgId: input.orgId, employeeId: h.employeeId, credentialId: null, action: "employee.hold.released",
       purpose: "employee.hold.released", summary: input.auditSummary.slice(0, 500),
-      metadata: { ...input.auditMetadata, auditClass: "admin", holdId: h.id, approvalId: t.id, kind: h.kind,
+      actorEmail: approverMember.email,
+      metadata: { ...callerMeta, auditClass: "admin", holdId: h.id, approvalId: t.id, kind: h.kind,
         requestedBy: h.releaseRequestedBy, releasedBy: approver, singleOwnerSelfRelease: approver === h.releaseRequestedBy },
     });
     h.releasedAt = new Date().toISOString();

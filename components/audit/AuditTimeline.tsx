@@ -8,6 +8,7 @@ const ACTOR_KIND_JA = {
   ai: "AI",
   human: "人",
   system: "システム",
+  unknown: "不明",
 } as const;
 
 function resultChipClass(kind: AuditRowView["result"]["kind"]): string {

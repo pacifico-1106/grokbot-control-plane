@@ -120,4 +120,39 @@ describe("Slack approval notify provider", () => {
     expect(actions?.elements?.find((el) => el.action_id === "staffpass_reject")?.style).toBe("danger");
     expect(actions?.elements?.every((el) => !el.text || el.text.type === "plain_text")).toBe(true);
   });
+
+  test("employees.credential.auto_renew card has 承認/却下 only — no 修正依頼", async () => {
+    const renew: ApprovalRequest = {
+      ...approval,
+      id: "apr_test_autorenew",
+      title: "社員証を更新しますか",
+      purpose: "admin.policy",
+      summary: "AI社員 emp_x の社員証を今すぐ更新します。承認しても鍵は AI に返しません。",
+      risk: "high",
+      tool: "employees.credential.auto_renew",
+      jobId: "job_autorenew",
+      metadata: { adminTool: "employees.credential.auto_renew", always_human: true, approvalClass: "admin" },
+    };
+    await upsertNotificationChannel({
+      orgId: renew.orgId,
+      provider: "slack",
+      enabled: true,
+      label: "承認用Slack",
+      config: { channelId: "C_NOTIFY", allowedUserIds: ["U_ADMIN"] },
+      secrets: { botToken: "xoxb-test", signingSecret: secret },
+    });
+    let payload: Record<string, unknown> = {};
+    globalThis.fetch = (async (_input, init) => {
+      payload = JSON.parse(String(init?.body || "{}"));
+      return Response.json({ ok: true, channel: "C_NOTIFY", ts: "1503435956.000248" });
+    }) as typeof fetch;
+    const results = await sendApprovalNotifications(renew, null);
+    expect(results.find((item) => item.provider === "slack")?.ok).toBe(true);
+    const blocks = payload.blocks as Array<{ type: string; elements?: Array<{ action_id?: string }> }>;
+    const ids = (blocks.find((block) => block.type === "actions")?.elements || []).map((el) => el.action_id);
+    expect(ids).toContain("staffpass_approve");
+    expect(ids).toContain("staffpass_reject");
+    expect(ids).not.toContain("staffpass_revise");
+    expect(String(payload.text)).toMatch(/更新しますか|社員証/);
+  });
 });
