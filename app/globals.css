@@ -134,6 +134,19 @@ pre,
   transform: translateY(-1px);
 }
 
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn:disabled:hover,
+.btn[disabled]:hover {
+  opacity: 0.45;
+  transform: none;
+}
+
 .btn-primary {
   background: linear-gradient(135deg, var(--accent), #79eaf3);
   color: var(--accent-fg);

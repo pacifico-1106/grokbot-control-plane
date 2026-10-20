@@ -25,6 +25,7 @@ const HOLD_RELEASE_ERROR_JA: Record<string, string> = {
   release_ticket_invalid: "解除の承認チケットが無効です。",
   hold_store_failed: "解除を完了できませんでした。時間をおいてもう一度お試しください。",
   hold_required: "解除対象の停止が指定されていません。",
+  release_reason_required: "解除の理由を書いてください。",
   hold_id_missing: "解除対象の停止が見つかりません。社員画面の緊急停止から承認してください。",
   auth_required: "ログインしてください。",
   hold_disabled: "緊急停止機能は無効です。",

@@ -49,6 +49,7 @@ describe("approvalDecideErrorJa: エラーは日本語で画面に出す", () =>
     expect(approvalDecideErrorJa({ error: "hold_release_web_only" })).toBe(HOLD_RELEASE_WEB_ONLY_MESSAGE_JA);
     expect(approvalDecideErrorJa({ reason: "fresh_login_required" })).toContain("5分以内");
     expect(approvalDecideErrorJa({ error: "self_approval_denied" })).toContain("本人は承認できません");
+    expect(approvalDecideErrorJa({ error: "release_reason_required" })).toContain("理由を書いてください");
     expect(approvalDecideErrorJa({})).toBe("操作に失敗しました。");
   });
 
