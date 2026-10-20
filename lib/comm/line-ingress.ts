@@ -274,8 +274,8 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
       text,
       lineUserId: sender,
       replyToken: typeof ev.replyToken === "string" ? ev.replyToken : null,
-    }).catch(() => ({ handled: true as const, bound: false }));
-    if (!link.bound) {
+    }).catch(() => ({ handled: true as const, bound: false as const }));
+    if (!(link.handled && link.bound)) {
       await (d.dispatchApproval ?? defaultDispatchApproval)(account, ev, "link");
     }
     return "done";

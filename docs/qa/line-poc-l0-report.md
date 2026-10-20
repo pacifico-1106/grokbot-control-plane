@@ -12,7 +12,7 @@
 
 | ID | 分類 | tool | reason | Web 経路 | ファイル:行 |
 |---|---|---|---|---|---|
-| HRK-HOLD-RELEASE | 停止解除 | `employee.hold.release` | `hold_release_web_only` | `/app/approvals` の『解除を承認』 / `POST /api/holds/release/approve` | `lib/safety/hold-config.ts` 35–38（`HOLD_RELEASE_SURFACES = ["web"]`）、45（`HOLD_RELEASE_TOOL`）、62–66（`isHoldReleaseTicket`）。`lib/safety/hold-release-auth.ts` 69。`lib/data/approvals.ts` 486 / 521。`lib/approvals/workflow-integration.ts` 77–79。`lib/approvals/hold-release-web.ts` 12–13 |
+| HRK-HOLD-RELEASE | 停止解除 | `employee.hold.release` | `hold_release_web_only` | `/app/approvals` の『解除を承認』 / `POST /api/holds/release/approve` | `lib/safety/hold-config.ts` 35（`HOLD_RELEASE_SURFACES = ["web"]`）、45（`HOLD_RELEASE_TOOL`）、62–66（`isHoldReleaseTicket`）。`lib/safety/hold-release-auth.ts` 69。`lib/data/approvals.ts` 486 / 521。`lib/approvals/workflow-integration.ts` 77–79。`lib/approvals/hold-release-web.ts` 12–13 |
 
 設計 §7 決定 9 / U-07 の「金銭・秘密（資格情報）・ポリシー変更」は、現行コードに **LINE 拒否の専用ゲートが無い**。always_human の承認は LINE postback でも通る。L0 では記録のみ。追加ゲートは該当 PR。
 

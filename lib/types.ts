@@ -555,6 +555,8 @@ export type AuditAction =
   | "slack.posted"
   | "slack.post_failed"
   | "line.posted"
+  /** U-03: Push 200/409 = LINE accepted the request, not delivered. */
+  | "line.post_accepted"
   | "line.post_failed"
   | "line.conversation_target_mismatch"
   | "comm.not_sent"

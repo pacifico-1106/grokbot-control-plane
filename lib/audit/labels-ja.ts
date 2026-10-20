@@ -201,6 +201,7 @@ export const AUDIT_ACTION_LABELS_JA: Record<AuditAction, string> = {
   "slack.posted": "Slackにメッセージを送信",
   "slack.post_failed": "Slackへの送信に失敗",
   "line.posted": "LINEにメッセージを送信",
+  "line.post_accepted": "LINEが受付（未配送）",
   "line.post_failed": "LINEへの送信に失敗",
   "line.conversation_target_mismatch": "LINEの相手が一致せず",
   "line.conversation_wake": "LINEの会話で起動",

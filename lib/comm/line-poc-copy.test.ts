@@ -27,6 +27,15 @@ function src(rel: string): string {
   return readFileSync(join(process.cwd(), rel), "utf8");
 }
 
+describe("client-safe copy module", () => {
+  test("line-poc-copy has no server imports (Vercel / Next client bundle)", () => {
+    const text = src("lib/comm/line-poc-copy.ts");
+    expect(text).not.toMatch(/from ["']@\/lib\/comm\/line-webhook-setup["']/);
+    expect(text).not.toMatch(/from ["']@\/lib\/comm\/link-code-guard["']/);
+    expect(text).not.toMatch(/from ["']node:/);
+  });
+});
+
 describe("LP-UI-01 constants are the screen source", () => {
   test("page path and section titles are used by the employee page / forms", () => {
     expect(LINE_COMM_ACCOUNT_PAGE_PATH).toBe("/app/employees/:employeeId");

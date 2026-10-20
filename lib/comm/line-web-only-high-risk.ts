@@ -30,7 +30,7 @@ export const LINE_WEB_ONLY_HIGH_RISK: readonly LineWebOnlyHighRiskItem[] = [
     lineCanApprove: false,
     webPath: "/app/approvals （『解除を承認』） / POST /api/holds/release/approve",
     refs: [
-      { file: "lib/safety/hold-config.ts", lines: "35-38", note: "HOLD_RELEASE_SURFACES = [\"web\"]" },
+      { file: "lib/safety/hold-config.ts", lines: "35", note: "HOLD_RELEASE_SURFACES = [\"web\"]" },
       { file: "lib/safety/hold-config.ts", lines: "45", note: "HOLD_RELEASE_TOOL = \"employee.hold.release\"" },
       { file: "lib/safety/hold-config.ts", lines: "62-66", note: "isHoldReleaseTicket reads adminTool ?? tool" },
       { file: "lib/safety/hold-release-auth.ts", lines: "69", note: "non-web surface → 403 hold_release_web_only" },

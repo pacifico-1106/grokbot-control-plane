@@ -1,9 +1,9 @@
 /**
  * LINE PoC screen / LINE / notify copy (U-15 / U-16 / U-21).
  * Kimura reviews these strings. Tests compare against this file, not guesses.
+ * Client-safe: string constants only. Do not import server modules here
+ * (EmployeeLine*Form is "use client").
  */
-import { LINE_WEBHOOK_SETUP_ERRORS_JA, lineWebhookSetupMessageJa } from "@/lib/comm/line-webhook-setup";
-import { LINK_CODE_FAILURE_REPLY_JA } from "@/lib/comm/link-code-guard";
 
 /** UI-01: employee detail. `:employeeId` is replaced by the real id. */
 export const LINE_COMM_ACCOUNT_PAGE_PATH = "/app/employees/:employeeId";
@@ -26,8 +26,6 @@ export const LINE_COMM_ACCOUNT_SUCCESS_JA = "Webhook を登録しました";
 export const LINE_COMM_ACCOUNT_SUCCESS_WITH_URL_JA = (webhookUrl: string) =>
   `Webhook を登録しました: ${webhookUrl}`;
 export const LINE_COMM_ACCOUNT_FAIL_FALLBACK_JA = "接続に失敗しました";
-export const LINE_COMM_ACCOUNT_SETUP_ERRORS_JA = LINE_WEBHOOK_SETUP_ERRORS_JA;
-export const lineCommAccountSetupMessageJa = lineWebhookSetupMessageJa;
 
 export const LINE_COMM_LINK_SECTION_TITLE_JA = "LINE 会話の連携コード";
 export const LINE_COMM_LINK_HELP_JA =
@@ -40,7 +38,8 @@ export const LINE_COMM_LINK_ISSUE_FORBIDDEN_JA = "オーナーまたは承認者
 /** LNK-01: conversation link replies on LINE (1:1). */
 export const LINE_CONVERSATION_LINK_OK_JA = "✅ Staffpass の社内メンバーとして確認しました。";
 /** Same reply for expired / used / other-employee / malformed / locked (does not reveal whether a code exists). */
-export const LINE_CONVERSATION_LINK_FAIL_JA = LINK_CODE_FAILURE_REPLY_JA;
+export const LINE_CONVERSATION_LINK_FAIL_JA =
+  "連携コードを確認できませんでした。Staffpass の設定画面で新しいコードを発行して、しばらくしてからもう一度送ってください。";
 export const LINE_CONVERSATION_LINK_GROUP_JA =
   "連携コードは、公式アカウントとの 1:1 トークで送ってください（グループでは受け付けません）。";
 

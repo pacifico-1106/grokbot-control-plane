@@ -21,9 +21,9 @@
  * the key #228's link codes already use); no key → fail closed.
  */
 import { createHmac } from "node:crypto";
+import { LINE_CONVERSATION_LINK_FAIL_JA } from "@/lib/comm/line-poc-copy";
 
-export const LINK_CODE_FAILURE_REPLY_JA =
-  "連携コードを確認できませんでした。Staffpass の設定画面で新しいコードを発行して、しばらくしてからもう一度送ってください。";
+export const LINK_CODE_FAILURE_REPLY_JA = LINE_CONVERSATION_LINK_FAIL_JA;
 
 export type LinkCodeReservation = {
   result: "ok" | "sender_locked" | "account_locked";
