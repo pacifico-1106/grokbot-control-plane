@@ -25,6 +25,7 @@ import { EmployeeLineLinkCodeForm } from "@/components/employees/EmployeeLineLin
 import { EmployeeLineCommAccountForm } from "@/components/employees/EmployeeLineCommAccountForm";
 import { commLinkCodePermissions } from "@/lib/employees/comm-link-code-permissions";
 import { isCommAccountsEnabled, isLineConversationEnabled, isLineWebhookAutoSetupEnabled } from "@/lib/comm/flags";
+import { LINE_COMM_ACCOUNT_SECTION_TITLE_JA, LINE_COMM_LINK_SECTION_TITLE_JA } from "@/lib/comm/line-poc-copy";
 import { conversationWebhookUrl, findEmployeeLineAccount } from "@/lib/comm/line-webhook-setup";
 import { isOrgAdminSession } from "@/lib/auth/require-org";
 import { GoogleCalendarIdentityForm } from "@/components/employees/GoogleCalendarIdentityForm";
@@ -269,7 +270,7 @@ export default async function EmployeeDetailPage({
 
       {canConnectLineAccount ? (
         <section className="surface p-5 space-y-3 mt-4">
-          <h2 className="text-sm font-medium">LINE 公式アカウント（会話）</h2>
+          <h2 className="text-sm font-medium">{LINE_COMM_ACCOUNT_SECTION_TITLE_JA}</h2>
           <EmployeeLineCommAccountForm
             employeeId={employee.id}
             canConnect={canConnectLineAccount}
@@ -281,7 +282,7 @@ export default async function EmployeeDetailPage({
 
       {showConversationLink ? (
         <section className="surface p-5 space-y-3 mt-4">
-          <h2 className="text-sm font-medium">LINE 会話の連携コード</h2>
+          <h2 className="text-sm font-medium">{LINE_COMM_LINK_SECTION_TITLE_JA}</h2>
           <EmployeeLineLinkCodeForm
             employeeId={employee.id}
             canIssue={canIssueConversationLink}

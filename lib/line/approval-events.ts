@@ -39,6 +39,12 @@ import {
   sendLineText,
   withLineReplyCollector,
 } from "@/lib/notify/line";
+import {
+  LINE_APPROVER_LINK_ERROR_JA,
+  LINE_APPROVER_LINK_GROUP_JA,
+  LINE_APPROVER_LINK_INVALID_JA,
+  LINE_APPROVER_LINK_OK_JA,
+} from "@/lib/comm/line-poc-copy";
 
 export type LineApprovalSource = { type?: string; userId?: string; groupId?: string; roomId?: string };
 export type LineApprovalEvent = {
@@ -55,12 +61,10 @@ const MSG_FORBIDDEN = "この操作は許可されていません。";
 const MSG_NO_USER = "LINE のユーザーを確認できないため、この操作は処理できません。";
 const MSG_WORKFLOW_REVISION =
   "この承認は複数人の承認（合議）で進んでいるため、LINE からの修正依頼は受け付けできません。［承認］か［却下］を選ぶか、Staffpass の承認画面で対応してください。";
-const MSG_LINK_OK =
-  "✅ この LINE アカウントを Staffpass の承認者として確認しました。Staffpass の設定画面に LINE ユーザー ID が表示されます。";
-const MSG_LINK_INVALID =
-  "連携コードが無効か、有効期限（15分）が切れています。Staffpass の設定画面で新しいコードを発行してください。";
-const MSG_LINK_GROUP = "連携コードは、公式アカウントとの 1:1 トークで送ってください（グループでは受け付けません）。";
-const MSG_LINK_ERROR = "連携コードを確認できませんでした。時間をおいて、もう一度お試しください。";
+const MSG_LINK_OK = LINE_APPROVER_LINK_OK_JA;
+const MSG_LINK_INVALID = LINE_APPROVER_LINK_INVALID_JA;
+const MSG_LINK_GROUP = LINE_APPROVER_LINK_GROUP_JA;
+const MSG_LINK_ERROR = LINE_APPROVER_LINK_ERROR_JA;
 
 async function reply(channel: NotificationChannelRuntime, event: LineApprovalEvent, text: string) {
   if (event.replyToken) await sendLineText(channel, text, event.replyToken);

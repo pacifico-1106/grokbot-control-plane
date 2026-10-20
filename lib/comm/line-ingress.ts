@@ -9,7 +9,8 @@
  *   2. that account's channel secret (unreadable → 503, fail closed)
  *   3. x-line-signature = base64(HMAC-SHA256(secret, raw body BYTES)), constant time → 401
  *      (the route reads the bytes capped at 1 MB; a decoded string is never signed)
- *   4. JSON (→ 400); `destination` must be this account's bot userId (→ 401)
+ *   4. JSON (→ 400); missing `destination` → 400 destination_missing;
+ *      mismatch → 403 destination_mismatch (U-12). Neither writes nor wakes.
  *   5. per event (first 100 only):
  *      - no webhookEventId → ignored (H7: no key, no dedup)
  *      - stale: older than 1 h and not a redelivery, or > 10 min in the future → dropped (H10)
@@ -19,6 +20,10 @@
  *      - U-06 same OA: postback (承認 / 却下 / 修正 / 緊急停止) is dispatched to
  *        the org's LINE approval channel WITHOUT a hold gate (U-19 / H11: the
  *        card can still be acted on). 1:1 revision text is tried the same way.
+ *      - U-02 unfollow: revoke that user's conversation binding; no wake / send.
+ *        The comm account stays ACTIVE. follow does not restore the binding
+ *        (forget the revoked row so they are external again). A new link code
+ *        is required.
  *      - PoC: other 1:1 text in active mode only (groups / rooms / media / follow → not dispatched)
  *      - emergency stop: checkOperable({phase:"wake"}) — held, unknown or
  *        error → not redeemed, not woken, audited (throttled). The event
@@ -76,6 +81,9 @@ export type LineIngressDeps = {
   dispatch: (e: NormalizedLineEvent) => Promise<void>;
   /** U-06: same-OA approval postback / leftover approver link / revision. */
   dispatchApproval?: (account: CommAccount, ev: LineEvent, kind: "postback" | "link" | "revision") => Promise<boolean>;
+  getLink?: (orgId: string, channelKey: string, lineUserId: string) => Promise<{ status: string } | null>;
+  revokeLink?: (orgId: string, channelKey: string, lineUserId: string) => Promise<unknown>;
+  forgetRevokedLink?: (orgId: string, channelKey: string, lineUserId: string) => Promise<unknown>;
 };
 
 const defaultDeps: LineIngressDeps = {
@@ -92,6 +100,18 @@ const defaultDeps: LineIngressDeps = {
     conversationToken: e.conversationToken,
     conversationTokenExpiresAt: e.conversationTokenExpiresAt,
   }),
+  async getLink(orgId, channelKey, lineUserId) {
+    const { getVoterBinding } = await import("@/lib/approval-workflow/voter-binding");
+    return getVoterBinding(orgId, "line", channelKey, lineUserId);
+  },
+  async revokeLink(orgId, channelKey, lineUserId) {
+    const { revokeVoterBinding } = await import("@/lib/approval-workflow/voter-binding");
+    return revokeVoterBinding(orgId, "line", channelKey, lineUserId);
+  },
+  async forgetRevokedLink(orgId, channelKey, lineUserId) {
+    const { forgetRevokedVoterBinding } = await import("@/lib/approval-workflow/voter-binding");
+    return forgetRevokedVoterBinding(orgId, "line", channelKey, lineUserId);
+  },
 };
 
 type LineEvent = {
@@ -143,8 +163,12 @@ export async function handleLineAccountWebhook(
   } catch {
     return { status: 400, body: { ok: false, error: "invalid_json" } };
   }
-  if (!parsed || typeof parsed !== "object" || parsed.destination !== account.externalAccountId) {
-    return { status: 401, body: { ok: false, error: "destination_mismatch" } };
+  const destination = parsed && typeof parsed === "object" ? parsed.destination : undefined;
+  if (destination == null || (typeof destination === "string" && destination.trim() === "")) {
+    return { status: 400, body: { ok: false, error: "destination_missing" } };
+  }
+  if (destination !== account.externalAccountId) {
+    return { status: 403, body: { ok: false, error: "destination_mismatch" } };
   }
   const events = Array.isArray(parsed.events) ? (parsed.events as LineEvent[]).slice(0, LINE_MAX_EVENTS_PER_BODY) : [];
   let retry = false;
@@ -209,6 +233,18 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
     return "done";
   }
 
+  const channelKey = `comm_account:${account.id}`;
+  if (ev.type === "unfollow" && LINE_USER_RE.test(sender)) {
+    // U-02: unlink this LINE user only. Account stays ACTIVE. No wake.
+    await (d.revokeLink ?? defaultDeps.revokeLink)?.(account.orgId, channelKey, sender).catch(() => undefined);
+    return "done";
+  }
+  if (ev.type === "follow" && LINE_USER_RE.test(sender)) {
+    // Re-follow does not restore the link. Drop the revoked row so they are external.
+    await (d.forgetRevokedLink ?? defaultDeps.forgetRevokedLink)?.(account.orgId, channelKey, sender).catch(() => undefined);
+    return "done";
+  }
+
   const text = ev.type === "message" && ev.message?.type === "text" ? String(ev.message.text ?? "") : "";
   if (ev.mode === "standby" || src.type !== "user" || src.groupId || src.roomId || !LINE_USER_RE.test(sender) || !text) return "done";
 
@@ -244,6 +280,16 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
     }
     return "done";
   }
+
+  let linkStatus: string | null = null;
+  try {
+    const link = await (d.getLink ?? defaultDeps.getLink)?.(account.orgId, channelKey, sender);
+    linkStatus = link?.status ?? null;
+  } catch {
+    return "done";
+  }
+  if (linkStatus === "revoked") return "done";
+
   const token = issueConversationToken(
     { orgId: account.orgId, employeeId: account.employeeId, accountId: account.id, surface: "line",
       conversationType: "dm", conversationId: sender, counterpartyId: sender,

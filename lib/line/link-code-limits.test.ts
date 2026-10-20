@@ -174,7 +174,7 @@ describe("limits ON", () => {
 describe("webhook route uses the guarded redeem", () => {
   test("route imports redeemLineLinkCode, not consumeLineLinkCode", async () => {
     const { readFileSync } = await import("node:fs");
-    const src = readFileSync(new URL("../../app/api/webhooks/line/[ref]/route.ts", import.meta.url), "utf8");
+    const src = readFileSync(new URL("./approval-events.ts", import.meta.url), "utf8");
     expect(src).toContain("redeemLineLinkCode(");
     expect(src).not.toContain("consumeLineLinkCode(");
   });

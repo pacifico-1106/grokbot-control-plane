@@ -109,10 +109,22 @@ describe("before any event is read", () => {
     expect(dispatched.length).toBe(1);
   });
 
-  test("signed body for another bot (destination mismatch) → 401", async () => {
+  test("signed body for another bot (destination mismatch) → 403 (U-12)", async () => {
     const raw = body([ev()], "U" + "9".repeat(32));
-    expect((await call(raw)).status).toBe(401);
+    const r = await call(raw);
+    expect(r).toEqual({ status: 403, body: { ok: false, error: "destination_mismatch" } });
     expect(dispatched).toEqual([]);
+  });
+
+  test("signed body with missing destination → 400 (U-12 / LP-UNK-07)", async () => {
+    const raw = JSON.stringify({ events: [ev()] });
+    const r = await call(raw);
+    expect(r).toEqual({ status: 400, body: { ok: false, error: "destination_missing" } });
+    expect(dispatched).toEqual([]);
+    const empty = JSON.stringify({ destination: "", events: [ev()] });
+    expect(await call(empty)).toEqual({ status: 400, body: { ok: false, error: "destination_missing" } });
+    const nul = JSON.stringify({ destination: null, events: [ev()] });
+    expect(await call(nul)).toEqual({ status: 400, body: { ok: false, error: "destination_missing" } });
   });
 
   test("invalid JSON after a valid signature → 400", async () => {
@@ -293,6 +305,57 @@ describe("U-06 same OA / U-19 hold: approval postback vs wake", () => {
     expect((await call(raw)).status).toBe(404);
     expect(dispatched).toEqual([]);
     delete process.env.LINE_CONVERSATION_ORG_IDS;
+  });
+});
+
+describe("U-02 unfollow unlink", () => {
+  test("unfollow revokes that user only, does not wake, account stays active (LP-UNF-01)", async () => {
+    const links = new Map<string, { status: string }>([[USER, { status: "active" }]]);
+    const d = {
+      ...deps(),
+      getLink: async (_o: string, _k: string, userId: string) => links.get(userId) ?? null,
+      revokeLink: async (_o: string, _k: string, userId: string) => {
+        links.set(userId, { status: "revoked" });
+      },
+      forgetRevokedLink: async (_o: string, _k: string, userId: string) => {
+        if (links.get(userId)?.status === "revoked") links.delete(userId);
+      },
+    };
+    const raw = body([ev({ type: "unfollow", message: undefined, webhookEventId: "01HZZZZZZZZZZZZZZZZZZUNF1" })]);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, d)).status).toBe(200);
+    expect(dispatched).toEqual([]);
+    expect(links.get(USER)).toEqual({ status: "revoked" });
+    expect(account.status).toBe("active");
+  });
+
+  test("after unfollow, 1:1 text does not wake (LP-UNF-03)", async () => {
+    const links = new Map<string, { status: string }>([[USER, { status: "revoked" }]]);
+    const d = {
+      ...deps(),
+      getLink: async (_o: string, _k: string, userId: string) => links.get(userId) ?? null,
+    };
+    const raw = body([ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZUNF2" })]);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, d)).status).toBe(200);
+    expect(dispatched).toEqual([]);
+  });
+
+  test("re-follow does not restore the link; later text wakes as unlinked (LP-UNF-04)", async () => {
+    const links = new Map<string, { status: string }>([[USER, { status: "revoked" }]]);
+    const d = {
+      ...deps(),
+      getLink: async (_o: string, _k: string, userId: string) => links.get(userId) ?? null,
+      forgetRevokedLink: async (_o: string, _k: string, userId: string) => {
+        if (links.get(userId)?.status === "revoked") links.delete(userId);
+      },
+    };
+    const follow = body([ev({ type: "follow", message: undefined, webhookEventId: "01HZZZZZZZZZZZZZZZZZZFOL1" })]);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(follow), signature: sig(follow) }, d)).status).toBe(200);
+    expect(dispatched).toEqual([]);
+    expect(links.has(USER)).toBe(false);
+    const text = body([ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZFOL2" })]);
+    expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(text), signature: sig(text) }, d)).status).toBe(200);
+    expect(dispatched.length).toBe(1);
+    expect(dispatched[0]?.senderId).toBe(USER);
   });
 });
 

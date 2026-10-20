@@ -213,6 +213,32 @@ describe("voter binding registration", () => {
     expect(binding?.status).toBe("revoked");
   });
 
+  test("forgetRevokedVoterBinding drops a revoked row and never restores it (U-02)", async () => {
+    const { forgetRevokedVoterBinding } = await import("./voter-binding");
+    const createResult = await createPendingVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "line",
+      channelKey: "comm_account:acct-unf",
+      externalUserId: "U" + "c".repeat(32),
+      memberId: DEMO_MEMBER_ID,
+    });
+    expect(createResult.ok).toBe(true);
+    if (!createResult.ok) return;
+    await verifyVoterBinding({
+      orgId: DEMO_ORG_ID,
+      provider: "line",
+      channelKey: "comm_account:acct-unf",
+      externalUserId: "U" + "c".repeat(32),
+      verificationCode: createResult.verificationCode,
+    });
+    await revokeVoterBinding(DEMO_ORG_ID, "line", "comm_account:acct-unf", "U" + "c".repeat(32));
+    const forgotten = await forgetRevokedVoterBinding(DEMO_ORG_ID, "line", "comm_account:acct-unf", "U" + "c".repeat(32));
+    expect(forgotten).toEqual({ ok: true, forgotten: true });
+    expect(await getVoterBinding(DEMO_ORG_ID, "line", "comm_account:acct-unf", "U" + "c".repeat(32))).toBeNull();
+    const again = await forgetRevokedVoterBinding(DEMO_ORG_ID, "line", "comm_account:acct-unf", "U" + "c".repeat(32));
+    expect(again).toEqual({ ok: true, forgotten: false });
+  });
+
   test("listVoterBindings filters by status", async () => {
     await createPendingVoterBinding({
       orgId: DEMO_ORG_ID,

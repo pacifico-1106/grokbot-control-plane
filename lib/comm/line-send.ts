@@ -37,6 +37,7 @@
 import { readCommAccountSecretsForServer } from "@/lib/comm/accounts";
 import { resolveConversationTarget } from "@/lib/comm/conversation-token";
 import { isLineConversationEnabled } from "@/lib/comm/flags";
+import { LINE_429_MONTHLY_LIMIT_MESSAGE, LINE_429_RATE_LIMIT_MESSAGE } from "@/lib/comm/line-429-official";
 import { checkLineSendAllowed, type PreSendResult, type PreSendTarget } from "@/lib/comm/pre-send";
 import { claimLineReplyToken, __resetLineReplyTokenLedgerForTests } from "@/lib/comm/reply-token-ledger";
 
@@ -68,8 +69,8 @@ export function classifyLine429(body: string | undefined | null):
   | "line_rate_limited"
   | "line_not_sent_429" {
   const t = String(body || "");
-  if (/you have reached your monthly limit/i.test(t)) return "line_monthly_quota_exceeded";
-  if (/the api rate limit has been exceeded/i.test(t)) return "line_rate_limited";
+  if (t.toLowerCase().includes(LINE_429_MONTHLY_LIMIT_MESSAGE.toLowerCase())) return "line_monthly_quota_exceeded";
+  if (t.toLowerCase().includes(LINE_429_RATE_LIMIT_MESSAGE.toLowerCase())) return "line_rate_limited";
   return "line_not_sent_429";
 }
 
@@ -143,6 +144,9 @@ export async function sendLineConversationMessage(
   let audience: "internal" | "external";
   try {
     const link = await d.getLink(t.orgId, `comm_account:${t.accountId}`, t.counterpartyId);
+    if (link?.status === "revoked") {
+      return { status: "not_sent", reason: "counterparty_unfollowed" };
+    }
     audience = link && link.status === "active" ? "internal" : "external";
   } catch {
     return { status: "not_sent", reason: "counterparty_link_unavailable" };

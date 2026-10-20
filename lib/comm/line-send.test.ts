@@ -90,6 +90,15 @@ describe("target and audience", () => {
     expect(preSendArgs).toEqual([{ orgId: ORG, employeeId: EMP, accountId: account.id, counterpartyId: USER, requiresLink: true }]);
   });
 
+  test("revoked (unfollowed) → not_sent counterparty_unfollowed, even with approval (U-02 / LP-UNF-03)", async () => {
+    link = { status: "revoked" };
+    expect(await send({ externalSendAllowed: true })).toMatchObject({
+      status: "not_sent",
+      reason: "counterparty_unfollowed",
+    });
+    expect(calls).toEqual([]);
+  });
+
   test("not linked → external; refused unless the caller passed approval / policy (default)", async () => {
     const r = await send();
     expect(r).toMatchObject({ status: "not_sent", reason: "external_send_needs_approval", audience: "external" });
