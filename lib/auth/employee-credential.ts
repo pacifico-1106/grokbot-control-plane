@@ -335,8 +335,8 @@ export async function resolveEmployeeCredential(
     return holdRefusal(operable.code, {
       orgId: resolved.orgId || employee.orgId,
       employeeId: resolved.employeeId,
-      credentialId: resolved.credentialId,
-      holdId: operable.holdId,
+      credentialId: resolved.credentialId ?? undefined,
+      holdId: operable.holdId ?? undefined,
     });
   }
 
