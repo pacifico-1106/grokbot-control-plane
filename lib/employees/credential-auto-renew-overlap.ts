@@ -313,7 +313,7 @@ export async function expireOverlappedOldCredentials(now?: Date): Promise<{
         orgId: row.orgId,
         employeeId: row.employeeId,
         credentialId: row.newCredentialId,
-        action: "credential.renew_new_revoked",
+        action: "credential.renew_claim_denied",
         purpose: "admin.policy",
         summary: "未使用の新社員証を失効（重ね置き期限）",
         metadata: {
