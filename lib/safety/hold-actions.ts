@@ -330,7 +330,8 @@ export async function approveHoldRelease(input: {
   const me = `member:${actor.member.id}`;
   if (me === hold.releaseRequestedBy && ticket.metadata?.singleOwnerSelfRelease !== true) {
     const denied = fail("self_approval_denied", 403, "申請した本人は承認できません。別の人が承認してください。");
-    await recordSelfApprovalDenied({
+    // Same as MCP hold 403: fire-and-forget so a hung write cannot stall the 403.
+    void recordSelfApprovalDenied({
       orgId: input.orgId,
       holdId: hold.id,
       employeeId: hold.employeeId,
@@ -338,7 +339,7 @@ export async function approveHoldRelease(input: {
       actorEmail: actor.member.email,
       requestedBy: hold.releaseRequestedBy,
       reason: "self_approval_denied",
-    }).catch(() => undefined);
+    });
     return denied;
   }
   const patch = { releaseApprovedVia: actor.surface, releaseApprovedAt: now.toISOString(), releaseApproverMemberId: actor.member.id };

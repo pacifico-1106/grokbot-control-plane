@@ -980,9 +980,9 @@ try:
     sql(ROOT / "tests/security/db-hold-denial-audit.sql")
     from concurrent.futures import ThreadPoolExecutor as _HdaPool
     hda_org, hda_emp, hda_hold = (
-        "hd000000-0000-4000-8000-0000000000c1",
-        "hd100000-0000-4000-8000-0000000000c1",
-        "hd400000-0000-4000-8000-0000000000c1",
+        "d3000000-0000-4000-8000-0000000000c1",
+        "d1300000-0000-4000-8000-0000000000c1",
+        "d1500000-0000-4000-8000-0000000000c1",
     )
     query(
         f"insert into public.orgs(id, name) values ('{hda_org}', 'hold denial concurrent');"

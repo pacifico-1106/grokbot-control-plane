@@ -6,6 +6,12 @@
 -- NEVER token, hash, or prefix. RLS stays on, no policy, service_role only.
 begin;
 
+-- ACCESS EXCLUSIVE while the CHECK is dropped/re-added (brief; table is small).
+-- Prefer the known name (this migration + PG's usual inline-CHECK auto-name).
+-- Production / forked names: if a failure_kind CHECK still remains, drop that too.
+alter table public.mcp_auth_failures
+  drop constraint if exists mcp_auth_failures_failure_kind_check;
+
 do $$
 declare c name;
 begin
@@ -13,7 +19,9 @@ begin
   from pg_constraint
   where conrelid = 'public.mcp_auth_failures'::regclass
     and contype = 'c'
-    and pg_get_constraintdef(oid) like '%failure_kind%';
+    and conname <> 'mcp_auth_failures_failure_kind_check'
+    and pg_get_constraintdef(oid) like '%failure_kind%'
+  limit 1;
   if c is not null then
     execute format('alter table public.mcp_auth_failures drop constraint %I', c);
   end if;
@@ -66,6 +74,8 @@ begin
   if p_org_id is null then
     return false;
   end if;
+  perform set_config('lock_timeout', '200ms', true);
+  perform set_config('statement_timeout', '250ms', true);
   if (select count(*)::int from public.mcp_auth_failures where created_at > now() - interval '1 hour') >= 200 then
     return false;
   end if;
@@ -83,6 +93,10 @@ begin
   return true;
 exception
   when unique_violation then
+    return false;
+  when lock_not_available then
+    return false;
+  when query_canceled then
     return false;
 end
 $fn$;

@@ -11,6 +11,7 @@ let clientAvailable = true;
 const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
 const auditRows: Array<Record<string, unknown>> = [];
 let auditThrow = false;
+let auditHang = false;
 
 function fakeClient() {
   return {
@@ -28,6 +29,7 @@ mock.module("@/lib/supabase", () => ({
 }));
 mock.module("@/lib/data/audit", () => ({
   appendAuditEvent: async (event: Record<string, unknown>) => {
+    if (auditHang) return new Promise(() => {});
     if (auditThrow) throw new Error("audit_unavailable");
     auditRows.push(event);
   },
@@ -79,6 +81,7 @@ beforeEach(() => {
   rpcRes = { data: true, error: null };
   clientAvailable = true;
   auditThrow = false;
+  auditHang = false;
   delete process.env[FLAG];
 });
 
@@ -160,6 +163,22 @@ describe("recordSelfApprovalDenied", () => {
     });
     expect(auditRows).toEqual([]);
   });
+
+  test("hanging audit write times out and never throws", async () => {
+    prodMode();
+    process.env[FLAG] = "1";
+    auditHang = true;
+    const started = Date.now();
+    await expect(
+      recordSelfApprovalDenied({
+        orgId: ORG,
+        holdId: HOLD,
+        memberId: MEMBER,
+        reason: "self_approval_denied",
+      })
+    ).resolves.toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(800);
+  }, 2000);
 });
 
 describe("recordMcpHoldDenied", () => {

@@ -74,23 +74,26 @@ export async function recordSelfApprovalDenied(input: SelfApprovalDeniedAuditInp
     const memberId = (input.memberId || "").trim();
     if (!orgId || !holdId || !memberId) return;
     const reason = (input.reason || "self_approval_denied").trim() || "self_approval_denied";
-    await appendAuditEvent({
-      orgId,
-      employeeId: input.employeeId ?? null,
-      credentialId: null,
-      action: SELF_APPROVAL_DENIED_AUDIT_ACTION,
-      purpose: SELF_APPROVAL_DENIED_AUDIT_ACTION,
-      summary: "申請した本人による解除承認を拒否しました",
-      actorEmail: input.actorEmail ?? null,
-      metadata: {
-        auditClass: "admin",
-        holdId,
-        memberId,
-        actor: `member:${memberId}`,
-        reason,
-        ...(input.requestedBy ? { requestedBy: input.requestedBy } : {}),
-      },
-    });
+    await withTimeout(
+      appendAuditEvent({
+        orgId,
+        employeeId: input.employeeId ?? null,
+        credentialId: null,
+        action: SELF_APPROVAL_DENIED_AUDIT_ACTION,
+        purpose: SELF_APPROVAL_DENIED_AUDIT_ACTION,
+        summary: "申請した本人による解除承認を拒否しました",
+        actorEmail: input.actorEmail ?? null,
+        metadata: {
+          auditClass: "admin",
+          holdId,
+          memberId,
+          actor: `member:${memberId}`,
+          reason,
+          ...(input.requestedBy ? { requestedBy: input.requestedBy } : {}),
+        },
+      }),
+      HOLD_DENIAL_AUDIT_TIMEOUT_MS
+    );
   } catch {
     // observation only
   }
