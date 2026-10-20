@@ -6,8 +6,8 @@
  * Employee / org / leave all render the same HoldPanel — keep that one form aligned.
  *
  * Whitespace-only is empty (#414). Zero-width / invisible-control-only is also empty
- * (U+200B, U+200C, U+200D, U+2060, U+FEFF, …). Stored reasons stay trim-only so a
- * mid-string ZWJ in an emoji is kept.
+ * (U+200B, U+200C, U+200D, U+2060, U+FEFF, hangul fillers, variation selectors, tags, …).
+ * Stored reasons stay trim-only so mid-string ZWJ / VS16 in emoji is kept.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -25,6 +25,17 @@ const BOM = "\uFEFF";
 const IDEOGRAPHIC_SPACE = "\u3000";
 const FAMILY_ZWJ = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
 const EMOJI = "\u{1F44D}";
+const HEART_VS = "\u2764\uFE0F";
+const JP_FLAG = "\u{1F1EF}\u{1F1F5}";
+const HANGUL_FILLERS = ["\u3164", "\u115F", "\u1160", "\uFFA0"] as const;
+const VARIATION_SELECTORS = [
+  ...Array.from({ length: 0xFE0F - 0xFE00 + 1 }, (_, i) => String.fromCodePoint(0xFE00 + i)),
+  "\u{E0100}",
+  "\u{E01EF}",
+] as const;
+const TAG_CHARS = ["\u{E0001}", "\u{E0020}", "\u{E007F}"] as const;
+const ALM = "\u061C";
+const DEPRECATED_FORMAT = Array.from({ length: 0x206F - 0x206A + 1 }, (_, i) => String.fromCodePoint(0x206A + i));
 
 process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = "test-notification-key-0123456789abcdef-holdrr";
 
@@ -87,6 +98,54 @@ describe("hasRequiredReason", () => {
     expect(hasVisibleReasonText(EMOJI)).toBe(true);
     expect(hasVisibleReasonText("誤停止")).toBe(true);
     expect(hasVisibleReasonText(FAMILY_ZWJ)).toBe(true);
+  });
+  test("M1 hangul fillers alone are not a reason", async () => {
+    const { hasRequiredReason, hasVisibleReasonText } = await import("@/lib/safety/required-reason");
+    for (const ch of HANGUL_FILLERS) {
+      expect(hasRequiredReason(ch)).toBe(false);
+      expect(hasVisibleReasonText(ch)).toBe(false);
+    }
+  });
+  test("M1 variation selectors alone are not a reason", async () => {
+    const { hasRequiredReason, hasVisibleReasonText } = await import("@/lib/safety/required-reason");
+    for (const ch of VARIATION_SELECTORS) {
+      expect(hasRequiredReason(ch)).toBe(false);
+      expect(hasVisibleReasonText(ch)).toBe(false);
+    }
+  });
+  test("M1 tag characters alone are not a reason", async () => {
+    const { hasRequiredReason, hasVisibleReasonText } = await import("@/lib/safety/required-reason");
+    for (const ch of TAG_CHARS) {
+      expect(hasRequiredReason(ch)).toBe(false);
+      expect(hasVisibleReasonText(ch)).toBe(false);
+    }
+  });
+  test("M1 U+061C alone is not a reason", async () => {
+    const { hasRequiredReason, hasVisibleReasonText } = await import("@/lib/safety/required-reason");
+    expect(hasRequiredReason(ALM)).toBe(false);
+    expect(hasVisibleReasonText(ALM)).toBe(false);
+  });
+  test("M1 U+206A–206F alone are not a reason", async () => {
+    const { hasRequiredReason, hasVisibleReasonText } = await import("@/lib/safety/required-reason");
+    for (const ch of DEPRECATED_FORMAT) {
+      expect(hasRequiredReason(ch)).toBe(false);
+      expect(hasVisibleReasonText(ch)).toBe(false);
+    }
+  });
+  test("❤️ / 🇯🇵 / 日本語 are a reason (VS and flag sequences stay visible)", async () => {
+    const { hasRequiredReason, hasVisibleReasonText } = await import("@/lib/safety/required-reason");
+    expect(hasRequiredReason(HEART_VS)).toBe(true);
+    expect(hasRequiredReason(JP_FLAG)).toBe(true);
+    expect(hasRequiredReason("誤停止")).toBe(true);
+    expect(hasVisibleReasonText(HEART_VS)).toBe(true);
+    expect(hasVisibleReasonText(JP_FLAG)).toBe(true);
+    expect(hasVisibleReasonText("誤停止")).toBe(true);
+  });
+  test("the emptiness regex uses the u flag so supplementary-plane tags / VS are matched", () => {
+    const helper = readFileSync(join(ROOT, "lib/safety/required-reason.ts"), "utf8");
+    expect(helper).toMatch(/INVISIBLE_REASON_CHARS\s*=\s*\/.+\/gu/);
+    expect(helper).toContain("\\u{E0100}");
+    expect(helper).toContain("\\u{E0001}");
   });
   test("the hint copy is the one 八坂さん needed on the empty-reason button", async () => {
     const { REQUIRED_REASON_HINT_JA } = await import("@/lib/safety/required-reason");
@@ -246,6 +305,18 @@ describe("POST /api/holds/release/request empty reason → 400", () => {
     expect((await hold.checkOperable({ orgId: ORG, employeeId: EMP, phase: "gateway" })).ok).toBe(false);
   });
 
+  test("M1 invisible-only reasons are 400 release_reason_required; hold stays on", async () => {
+    const stop = await web("@/app/api/holds/stop/route", "mem_1", { employeeId: EMP, reason: "様子がおかしい" });
+    expect(stop.status).toBe(200);
+    const holdId = String(stop.body.holdId);
+    const cases = [...HANGUL_FILLERS, ...VARIATION_SELECTORS, ...TAG_CHARS, ALM, ...DEPRECATED_FORMAT];
+    for (const reason of cases) {
+      const reqd = await web("@/app/api/holds/release/request/route", "mem_2", { holdId, reason });
+      expect(reqd).toMatchObject({ status: 400, body: { ok: false, error: "release_reason_required" } });
+    }
+    expect((await hold.checkOperable({ orgId: ORG, employeeId: EMP, phase: "gateway" })).ok).toBe(false);
+  });
+
   test("emoji / 日本語 / ZWJ emoji pass; stored release reason is trim-only (ZWJ kept)", async () => {
     const { requestHoldRelease } = await import("@/lib/safety/hold-actions");
     const { DEMO_ORG: org, getRuntimeMemberById } = await import("@/lib/demo-data");
@@ -267,6 +338,29 @@ describe("POST /api/holds/release/request empty reason → 400", () => {
       expect(row?.releaseReason).toBe(c.stored);
     }
     expect(FAMILY_ZWJ).toContain(ZWJ);
+  });
+
+  test("❤️ / 🇯🇵 / 日本語 pass; stored release reason is trim-only (VS kept)", async () => {
+    const { requestHoldRelease } = await import("@/lib/safety/hold-actions");
+    const { DEMO_ORG: org, getRuntimeMemberById } = await import("@/lib/demo-data");
+    const admin = getRuntimeMemberById("mem_2")!;
+    const actor = { type: "member" as const, member: admin, surface: "web" as const, authUserId: null, demoAuthTime: new Date().toISOString() };
+    const cases: Array<{ input: string; stored: string }> = [
+      { input: `  ${HEART_VS}  `, stored: HEART_VS },
+      { input: `  ${JP_FLAG}  `, stored: JP_FLAG },
+      { input: "  誤停止  ", stored: "誤停止" },
+    ];
+    for (const c of cases) {
+      store.__resetDemoHoldsForTests();
+      const stop = await web("@/app/api/holds/stop/route", "mem_1", { employeeId: EMP, reason: "様子がおかしい" });
+      expect(stop.status).toBe(200);
+      const holdId = String(stop.body.holdId);
+      const req = await requestHoldRelease({ orgId: org.id, holdId, reason: c.input, actor });
+      expect(req.ok).toBe(true);
+      const row = await store.getHoldStore().getHold(org.id, holdId);
+      expect(row?.releaseReason).toBe(c.stored);
+    }
+    expect(HEART_VS).toContain("\uFE0F");
   });
 });
 
