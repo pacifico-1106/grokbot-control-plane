@@ -150,8 +150,9 @@ describe("redeemConversationLinkCode", () => {
     expect(JSON.stringify(replies)).not.toContain(issued.display);
   });
 
-  test("redeem failure does not Reply", async () => {
-    const replies: unknown[] = [];
+  test("redeem failure Replies the fixed LNK-01 copy (never the code)", async () => {
+    const { LINE_CONVERSATION_LINK_FAIL_JA } = await import("@/lib/comm/line-poc-copy");
+    const replies: Array<{ text: string }> = [];
     const r = await redeemConversationLinkCode(
       {
         orgId: ORG,
@@ -161,10 +162,11 @@ describe("redeemConversationLinkCode", () => {
         lineUserId: USER,
         replyToken: "rt-fail-1",
       },
-      { sendReply: async () => { replies.push("sent"); } }
+      { sendReply: async ({ text }) => { replies.push({ text }); } }
     );
     expect(r).toMatchObject({ handled: true, bound: false });
-    expect(replies).toEqual([]);
+    expect(replies).toEqual([{ text: LINE_CONVERSATION_LINK_FAIL_JA }]);
+    expect(JSON.stringify(replies)).not.toContain("XXXX");
   });
 
   test("a code issued for another channel / account is refused (no silent cross-bind)", async () => {

@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
-import { createCommAccount, resetDemoCommAccounts, setCommAccountSecrets, type CommAccount } from "@/lib/comm/accounts";
+import { createCommAccount, listCommAccounts, resetDemoCommAccounts, setCommAccountSecrets, type CommAccount } from "@/lib/comm/accounts";
 import { handleLineAccountWebhook, type NormalizedLineEvent } from "@/lib/comm/line-ingress";
 import type { OperableResult } from "@/lib/safety/hold";
 import { __resetHoldAuditThrottleForTests, __setHoldReaderForTests } from "@/lib/safety/hold";
@@ -26,8 +26,10 @@ let account: CommAccount;
 let dispatched: NormalizedLineEvent[];
 let holdCalls: Array<{ orgId?: string | null; employeeId?: string | null; phase: string }>;
 let hold: OperableResult | "throw";
+const origFetch = globalThis.fetch;
 
 beforeEach(async () => {
+  globalThis.fetch = (async () => new Response("{}", { status: 200 })) as typeof fetch;
   process.env.COMM_ACCOUNTS_ENABLED = "true";
   process.env.LINE_CONVERSATION_ENABLED = "true";
   process.env.NOTIFICATION_CONFIG_ENCRYPTION_KEY = "k".repeat(40);
@@ -45,6 +47,7 @@ beforeEach(async () => {
   hold = { ok: true };
 });
 afterEach(() => {
+  globalThis.fetch = origFetch;
   for (const k of ENV) {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k];
@@ -325,7 +328,10 @@ describe("U-02 unfollow unlink", () => {
     expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, d)).status).toBe(200);
     expect(dispatched).toEqual([]);
     expect(links.get(USER)).toEqual({ status: "revoked" });
-    expect(account.status).toBe("active");
+    const rows = await listCommAccounts(ORG);
+    const after = rows.find((r) => r.id === account.id);
+    expect(after?.status).toBe("active");
+    expect(after?.status).not.toBe("disabled");
   });
 
   test("after unfollow, 1:1 text does not wake (LP-UNF-03)", async () => {
