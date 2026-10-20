@@ -973,6 +973,50 @@ try:
           "used new switchover; hold start blocks claimable; release while held → held_blocked; "
           "CAS WHERE pins approved+unheld+live old; abort minted; "
           "re-applicable; rollback restores 191/201/202 functions; forward again.")
+    # Hold-denial MCP 403 audit (20261020400000, HOLD_DENIAL_AUDIT_ENABLED).
+    hda = ROOT / "supabase/migrations/20261020400000_hold_denial_audit.sql"
+    sql(hda)
+    sql(hda)  # re-applicable
+    sql(ROOT / "tests/security/db-hold-denial-audit.sql")
+    from concurrent.futures import ThreadPoolExecutor as _HdaPool
+    hda_org, hda_emp, hda_hold = (
+        "d3000000-0000-4000-8000-0000000000c1",
+        "d1300000-0000-4000-8000-0000000000c1",
+        "d1500000-0000-4000-8000-0000000000c1",
+    )
+    query(
+        f"insert into public.orgs(id, name) values ('{hda_org}', 'hold denial concurrent');"
+        f"insert into public.employees(id, org_id, display_name, role_label) values "
+        f"('{hda_emp}', '{hda_org}', 'HoldDenial C', 'fixture');"
+    )
+    hda_commands = [
+        "set role service_role; select public.record_hold_mcp_denial("
+        f"'employee_on_hold', '{hda_org}', '{hda_emp}', '{hda_hold}', 'tools/list');"
+        for _ in range(12)
+    ]
+    with _HdaPool(max_workers=12) as pool:
+        hda_hits = list(pool.map(query, hda_commands))
+    assert hda_hits.count("t") == 1 and hda_hits.count("f") == 11, hda_hits
+    query(
+        f"delete from public.mcp_auth_failures where org_id = '{hda_org}';"
+        f"delete from public.employees where id = '{hda_emp}';"
+        f"delete from public.orgs where id = '{hda_org}';"
+    )
+    sql(ROOT / "supabase/verification/20261020400000_hold_denial_audit_rollback.sql")
+    assert query(
+        "select to_regprocedure('public.record_hold_mcp_denial(text,uuid,uuid,uuid,text)') is null"
+        " and not exists (select 1 from information_schema.columns where table_schema = 'public'"
+        " and table_name = 'mcp_auth_failures' and column_name = 'hold_id')"
+        " and to_regclass('public.mcp_auth_failures') is not null"
+        " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is not null;"
+    ) == "t"
+    sql(hda)  # forward again after rollback
+    sql(ROOT / "tests/security/db-hold-denial-audit.sql")
+    print("PASS: hold denial audit (20261020400000): org_on_hold / employee_on_hold only; "
+          "org_id required; 1-minute unique throttle per kind×org×employee; other org independent; "
+          "anon/authenticated cannot execute; no token/hash/prefix columns; "
+          "12 concurrent employee_on_hold → 1 insert; re-applicable; "
+          "rollback drops RPC + hold_id and restores the 3-kind CHECK; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")

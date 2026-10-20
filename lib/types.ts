@@ -508,6 +508,7 @@ export type AuditAction =
   | "employee.hold.release_requested"
   | "employee.hold.released"
   | "employee.hold.release_refused"
+  | "employee.hold.self_approval_denied"
   | "employee.hold.ai_refused"
   | "tool.invoke"
   | "comm.delete.succeeded"

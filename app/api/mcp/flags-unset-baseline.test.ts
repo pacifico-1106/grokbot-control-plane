@@ -38,6 +38,7 @@ const FLAGS = [
   "MCP_OAUTH_CIMD_ALLOWED_HOSTS",
   "MCP_AUTH_FAILURE_AUDIT_ENABLED",
   "MCP_AUTH_401_NEXT_STEP_JA_ENABLED",
+  "HOLD_DENIAL_AUDIT_ENABLED",
   "MCP_EMPLOYEE_BADGE_MCP_ENABLED",
 ];
 const saved: Record<string, string | undefined> = {};

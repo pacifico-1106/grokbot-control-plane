@@ -156,6 +156,21 @@ describe("resolveAuditActor: emergency-stop trail uses started_by, not employee_
     expect(view).toEqual({ kind: "system", name: "システム", emailMasked: null, employeeId: null });
   });
 
+  test("self_approval_denied is the denying member, not the held AI", () => {
+    const view = resolveAuditActor(
+      holdEvent({
+        action: "employee.hold.self_approval_denied",
+        actorEmail: "admin@example.com",
+        metadata: { actor: "member:mem_2", memberId: "mem_2", holdId: "hold_1", reason: "self_approval_denied" },
+      }),
+      purchasing
+    );
+    expect(view.kind).toBe("human");
+    expect(view.employeeId).toBeNull();
+    expect(JSON.stringify(view)).not.toContain("購買AI社員");
+    expect(JSON.stringify(view)).not.toContain("emp_buy");
+  });
+
   test("ops-console stop is 人 (運営), not the held employee", () => {
     const view = resolveAuditActor(
       holdEvent({
