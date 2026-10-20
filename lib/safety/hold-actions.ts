@@ -156,6 +156,11 @@ export async function startHold(input: {
     attempts += 1;
     try {
       const out = await store.start(startInput);
+      const { blockClaimableCredentialRenewalsOnHold } = await import("@/lib/data/credential-renewals");
+      await blockClaimableCredentialRenewalsOnHold({
+        orgId: input.orgId,
+        employeeId: input.employeeId,
+      }).catch(() => 0);
       await appendAuditEvent({
         orgId: input.orgId, employeeId: input.employeeId, credentialId: null, action: "employee.hold.started",
         purpose: "employee.hold.started",

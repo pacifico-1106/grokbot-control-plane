@@ -8,12 +8,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fulfillApprovedAdmin } from "@/lib/admin-mcp/fulfill-admin";
 import { fingerprintSecret, getBinding, rotateCredential as demoRotate } from "@/lib/bindings";
-import { resolveApproval } from "@/lib/data";
+import { resolveApproval, updateApprovalMetadata } from "@/lib/data";
 import {
+  demoGetOverlapCredential,
   demoListCredentialRenewals,
   demoPatchCredentialRenewal,
   demoResetCredentialRenewals,
 } from "@/lib/data/credential-renewals";
+import { expireOverlappedOldCredentials } from "./credential-auto-renew-overlap";
 import { resetDemoAdminAgent } from "@/lib/data/admin-agents";
 import { getRuntimeAudit, getRuntimeEmployees } from "@/lib/demo-data";
 import { callAdminMcpTool } from "@/lib/mcp/admin-tools";
@@ -217,6 +219,48 @@ describe("claimCredentialGen1Http", () => {
     expect(demoListCredentialRenewals().find((r) => r.employeeId === emp.id)?.state).toBe("pending_approval");
   });
 
+  test("H1: unused gen1 mint after overlap → revoke new, keep old", async () => {
+    const emp = newEmployee(ORG_A);
+    const secret = oldSecret();
+    bindOld(emp, secret);
+    const fpBefore = getBinding(emp.id)?.credentialFingerprint;
+    await openClaimable(emp);
+    const issued = await claimGen1({
+      orgId: ORG_A,
+      employeeId: emp.id,
+      oldCredentialId: emp.credentialId!,
+    });
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) throw new Error("expected claim");
+    const row = demoListCredentialRenewals().find((r) => r.employeeId === emp.id)!;
+    demoPatchCredentialRenewal(row.id, {
+      overlapUntil: new Date(Date.now() - 1000).toISOString(),
+    });
+    const ran = await expireOverlappedOldCredentials();
+    expect(ran.revoked).toBe(0);
+    expect(demoListCredentialRenewals().find((r) => r.id === row.id)?.state).toBe("expired");
+    expect(demoGetOverlapCredential(issued.newCredentialId)?.revokedAt).toBeTruthy();
+    expect(getBinding(emp.id)?.credentialFingerprint).toBe(fpBefore);
+  });
+
+  test("M1: heldByHoldId on the approval blocks claim (assertTicketNotHeld)", async () => {
+    const emp = newEmployee(ORG_A);
+    bindOld(emp, oldSecret());
+    const opened = await openClaimable(emp);
+    const { getApprovalById } = await import("@/lib/data");
+    const approval = await getApprovalById(opened.approvalId, ORG_A);
+    expect(approval).not.toBeNull();
+    await updateApprovalMetadata(approval!, { heldByHoldId: "hold_r8_ticket" });
+    const issued = await claimGen1({
+      orgId: ORG_A,
+      employeeId: emp.id,
+      oldCredentialId: emp.credentialId!,
+    });
+    expect(issued.ok).toBe(false);
+    if (!issued.ok) expect(["held", "approval_held", "not_claimable"]).toContain(issued.code);
+    expect(demoListCredentialRenewals().find((r) => r.employeeId === emp.id)?.newCredentialId).toBeFalsy();
+  });
+
   test("pickup while held → held, no mint", async () => {
     const emp = newEmployee(ORG_A);
     bindOld(emp, oldSecret());
@@ -283,6 +327,7 @@ describe("R8 surface: HTTP only, flag default OFF, no hold release", () => {
       "lib/employees/credential-auto-renew-gen1.ts",
       "app/api/mcp/employee/credential/claim/route.ts",
       "supabase/migrations/20261020200000_credential_auto_renew_gen1_http.sql",
+      "supabase/migrations/20261020300000_credential_auto_renew_review_followup.sql",
     ];
     for (const f of files) {
       const text = readFileSync(resolve(f), "utf8");

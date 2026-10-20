@@ -929,6 +929,26 @@ try:
           "and pin mode=gen1_http; pending / expired / other org / hold refused; "
           "anon/authenticated cannot execute; no secret columns; "
           "re-applicable; rollback drops 1 function and keeps 20261019100000+20261020100000; forward again.")
+    # 社員証 auto-renew review follow-up (20261020300000).
+    carrv = ROOT / "supabase/migrations/20261020300000_credential_auto_renew_review_followup.sql"
+    sql(carrv)
+    sql(carrv)  # re-applicable
+    sql(ROOT / "tests/security/db-credential-auto-renew-review-followup.sql")
+    sql(ROOT / "supabase/verification/20261020300000_credential_auto_renew_review_followup_rollback.sql")
+    assert query(
+        "select to_regprocedure('public.abort_minted_credential_renewal(uuid,uuid,text,uuid)') is null"
+        " and to_regprocedure('public.block_claimable_credential_renewals_on_hold_apply(uuid,uuid)') is null"
+        " and to_regprocedure('public.block_claimable_credential_renewals_on_hold()') is null"
+        " and position('unused_new_revoked' in pg_get_functiondef("
+        "'public.revoke_expired_overlapped_old_credential(uuid,uuid,uuid,uuid,timestamptz)'::regprocedure)) = 0"
+        " and to_regprocedure('public.claim_credential_renewal_gen1_http(uuid,uuid,uuid,text,timestamptz)') is not null;"
+    ) == "t"
+    sql(carrv)  # forward again after rollback
+    sql(ROOT / "tests/security/db-credential-auto-renew-review-followup.sql")
+    print("PASS: credential auto-renew review follow-up (20261020300000): unused new revoked / old kept; "
+          "used new switchover; hold start blocks claimable; release while held → held_blocked; "
+          "CAS WHERE pins approved+unheld+live old; abort minted; "
+          "re-applicable; rollback restores 191/201/202 functions; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")

@@ -271,6 +271,46 @@ describe("issueCredentialOverlap (R3)", () => {
     demoSetOverlapCleanupFail(false);
   });
 
+  test("M2: release after claim (no new id) while held → held_blocked, not claimable", async () => {
+    const emp = newEmployee(ORG_A);
+    bindOld(emp, oldSecret());
+    await openClaimable(emp);
+    const row = demoListCredentialRenewals().find((r) => r.employeeId === emp.id)!;
+    const { claimCredentialRenewal, releaseCredentialRenewal } = await import("@/lib/data/credential-renewals");
+    const token = "tok_release_held_01234567";
+    expect(
+      await claimCredentialRenewal({
+        id: row.id,
+        orgId: ORG_A,
+        employeeId: emp.id,
+        token,
+        at: new Date().toISOString(),
+      })
+    ).toBe(true);
+    demoSetEmployeeHold(emp.id, { kind: "stopped", holdId: "hold_m2_release" });
+    expect(await releaseCredentialRenewal({ id: row.id, orgId: ORG_A, token })).toBe(true);
+    expect(demoListCredentialRenewals().find((r) => r.id === row.id)?.state).toBe("held_blocked");
+    demoSetEmployeeHold(emp.id, null);
+    const again = await issueCredentialOverlap({
+      orgId: ORG_A,
+      employeeId: emp.id,
+      oldCredentialId: emp.credentialId!,
+    });
+    expect(again.ok).toBe(false);
+    demoSetEmployeeHold(emp.id, null);
+  });
+
+  test("L4: withoutSecrets drops claim_token even when injected", async () => {
+    const emp = newEmployee(ORG_A);
+    bindOld(emp, oldSecret());
+    await openClaimable(emp);
+    const row = demoListCredentialRenewals().find((r) => r.employeeId === emp.id)!;
+    demoPatchCredentialRenewal(row.id, { claim_token: "tok_leak_l4_01234567" } as never);
+    const listed = demoListCredentialRenewals().find((r) => r.id === row.id);
+    expect(JSON.stringify(listed)).not.toContain("tok_leak_l4_01234567");
+    expect(JSON.stringify(listed)).not.toMatch(/claim_token/);
+  });
+
   test("unapproved window → not_claimable", async () => {
     const emp = newEmployee(ORG_A);
     bindOld(emp, oldSecret());
@@ -461,7 +501,46 @@ describe("24h overlap cron", () => {
     expect(demoListCredentialRenewals().find((r) => r.id === row.id)?.state).toBe("claimed");
   });
 
-  test("overlap 24h elapsed → old revoked (reason=overlap_timeout), new stays", async () => {
+  test("H1: unused new after overlap → revoke new, keep old, expire, binding stays", async () => {
+    const { resolveEmployeeCredential } = await import("@/lib/auth/employee-credential");
+    const emp = newEmployee(ORG_A);
+    const secret = oldSecret();
+    bindOld(emp, secret);
+    const fpBefore = getBinding(emp.id)?.credentialFingerprint;
+    await openClaimable(emp);
+    const issued = await issueCredentialOverlap({
+      orgId: ORG_A,
+      employeeId: emp.id,
+      oldCredentialId: emp.credentialId!,
+    });
+    if (!issued.ok) throw new Error("expected issue");
+    const row = demoListCredentialRenewals().find((r) => r.employeeId === emp.id)!;
+    demoPatchCredentialRenewal(row.id, {
+      overlapUntil: new Date(Date.now() - 1000).toISOString(),
+    });
+    const ran = await expireOverlappedOldCredentials();
+    expect(ran.revoked).toBe(0);
+    expect(demoListCredentialRenewals().find((r) => r.id === row.id)?.state).toBe("expired");
+    expect(demoGetOverlapCredential(issued.newCredentialId)?.revokedAt).toBeTruthy();
+    expect(demoGetOverlapCredential(emp.credentialId!)?.revokedAt ?? null).toBeNull();
+    expect(getBinding(emp.id)?.credentialFingerprint).toBe(fpBefore);
+    expect((await resolveEmployeeCredential(req(secret))).ok).toBe(true);
+    expect((await resolveEmployeeCredential(req(issued.secret.raw))).ok).toBe(false);
+    const audit = getRuntimeAudit().find(
+      (e) =>
+        e.employeeId === emp.id &&
+        (e.action === "credential.renew_new_revoked" || e.metadata?.reason === "unused_after_overlap")
+    );
+    expect(audit).toBeDefined();
+    expect(JSON.stringify(audit)).not.toMatch(SECRETISH);
+    expect(
+      getRuntimeAudit().some(
+        (e) => e.action === "credential.renew_old_revoked" && e.employeeId === emp.id && e.metadata?.reason === "overlap_timeout"
+      )
+    ).toBe(false);
+  });
+
+  test("H1: used new after overlap → switchover revokes old, new stays", async () => {
     const { resolveEmployeeCredential } = await import("@/lib/auth/employee-credential");
     const emp = newEmployee(ORG_A);
     const secret = oldSecret();
@@ -473,6 +552,12 @@ describe("24h overlap cron", () => {
       oldCredentialId: emp.credentialId!,
     });
     if (!issued.ok) throw new Error("expected issue");
+    const neu = demoGetOverlapCredential(issued.newCredentialId);
+    expect(neu).toBeTruthy();
+    if (neu) {
+      const { demoPutOverlapCredential } = await import("@/lib/data/credential-renewals");
+      demoPutOverlapCredential({ ...neu, lastUsedAt: new Date().toISOString() });
+    }
     const row = demoListCredentialRenewals().find((r) => r.employeeId === emp.id)!;
     demoPatchCredentialRenewal(row.id, {
       overlapUntil: new Date(Date.now() - 1000).toISOString(),

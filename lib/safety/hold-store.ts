@@ -224,6 +224,11 @@ const demoStore: HoldStore = {
       await demoUpdateApproval(a.id, { metadata: { ...rest, heldByHoldId: id, heldAt: now } });
       heldTickets += 1;
     }
+    const { blockClaimableCredentialRenewalsOnHold } = await import("@/lib/data/credential-renewals");
+    await blockClaimableCredentialRenewalsOnHold({
+      orgId: input.orgId,
+      employeeId: input.employeeId,
+    }).catch(() => 0);
     return { holdId: id, created: !prev, upgraded: Boolean(prev), heldTickets };
   },
   async requestRelease(input) {

@@ -164,6 +164,14 @@ ADDITIVE = [
      "to_regclass('public.mcp_auth_failures') is null"
      " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is null"
      " and to_regprocedure('public.touch_credential_last_used(uuid)') is null"),
+    # Review follow-up child first: restore 191/201/202 functions before those rollbacks.
+    ("20261020300000_", "tests/security/db-credential-auto-renew-review-followup.sql",
+     "to_regprocedure('public.abort_minted_credential_renewal(uuid,uuid,text,uuid)') is null"
+     " and to_regprocedure('public.block_claimable_credential_renewals_on_hold_apply(uuid,uuid)') is null"
+     " and to_regprocedure('public.block_claimable_credential_renewals_on_hold()') is null"
+     " and position('unused_new_revoked' in pg_get_functiondef("
+     "'public.revoke_expired_overlapped_old_credential(uuid,uuid,uuid,uuid,timestamptz)'::regprocedure)) = 0"
+     " and to_regprocedure('public.claim_credential_renewal_gen1_http(uuid,uuid,uuid,text,timestamptz)') is not null"),
     # R8 child first: roll back gen1 claim RPC before R3/R1.
     ("20261020200000_", "tests/security/db-credential-auto-renew-gen1.sql",
      "to_regprocedure('public.claim_credential_renewal_gen1_http(uuid,uuid,uuid,text,timestamptz)') is null"
