@@ -1529,6 +1529,8 @@ export async function fulfillApprovedInvoke(
   if (already?.ok) return already;
   // Unknown LINE / Slack outcome: never take the claim again (a retry would Push).
   if (already?.error === POST_OUTCOME_UNKNOWN) return already;
+  // U-03: Push was accepted by LINE; retrying would double-send.
+  if (already?.error === "line_accepted_not_delivered") return already;
   // Re-check tool settings / mail policy before taking the execution claim so
   // a stop is audited with its reason (the authority check would otherwise
   // throw a generic approval_authority_revoked) and the claim is not touched.

@@ -175,7 +175,9 @@ describe("LINE comm.reply (flag ON) → sendLineConversationMessage", () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.sent).toBe(false);
     expect(res.body.lineAccepted).toBe(true);
-    expect(res.body.message).toBe("LINEが受け付けた（届いたとは限らない）");
+    expect(res.body.lineAcceptedNote).toBe("LINEが受け付けた（届いたとは限らない）");
+    expect((res.body.result as { accepted?: boolean; lineAccepted?: boolean }).accepted).toBe(false);
+    expect((res.body.result as { accepted?: boolean; lineAccepted?: boolean }).lineAccepted).toBe(true);
     expect(sends).toHaveLength(1);
   });
 

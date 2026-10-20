@@ -3963,7 +3963,11 @@ async function runGatewayInvokeInner(
     Boolean(conversationDelivery.lineAccepted);
   const sentFields = isAudienceGatedTool(toolDef) && conversationDelivery
     ? lineAccepted
-      ? { sent: false as const, lineAccepted: true as const, message: "LINEが受け付けた（届いたとは限らない）" }
+      ? {
+          sent: false as const,
+          lineAccepted: true as const,
+          lineAcceptedNote: "LINEが受け付けた（届いたとは限らない）",
+        }
       : { sent: true as const, ...(conversationDelivery.delivery === "stub" ? { simulated: true as const } : {}) }
     : {};
   return jsonResult({
@@ -4028,7 +4032,7 @@ async function runGatewayInvokeInner(
                           }
                       : tool === "comm.send" || tool === "comm.reply"
                       ? {
-                          accepted: true,
+                          accepted: !lineAccepted,
                           ...sentFields,
                           disclosed: egress?.decision === "summarize" ? "summary" : "source",
                           delivery: conversationDelivery?.delivery,
