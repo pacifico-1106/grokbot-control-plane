@@ -23,9 +23,9 @@ export const PINNED: Record<string, string[]> = {
   // G5 inside (checkOperable phase:"wake"). Ingress already checked; wake re-checks.
   "dispatchLineConversationWake(": ["lib/comm/line-ingress.ts"],
   // G1 inside.
-  "resolveEmployeeCredential(": ["app/api/gateway/invoke/route.ts", "app/api/mcp/route.ts", "lib/mcp-oauth/resource-server.ts"],
+  "resolveEmployeeCredential(": ["app/api/gateway/invoke/route.ts", "lib/mcp/employee-http.ts", "lib/mcp-oauth/resource-server.ts"],
   // G2 inside (resolveOAuthAccessToken).
-  "resolveMcpCredential(": ["app/api/mcp/route.ts"],
+  "resolveMcpCredential(": ["lib/mcp/employee-http.ts"],
   "resolveOAuthAccessToken(": ["lib/mcp-oauth/resource-server.ts"],
   // + two conservative hits of the widened import() scan (木村 10/12 07:15), reviewed: both load
   // "@/lib/data" inside Promise.all([...]) and never call assertExecutable.
@@ -55,6 +55,7 @@ const GATES: Array<[string, string, RegExp]> = [
   ["pre-send LINE (LINE PoC L-5/L-6)", "lib/comm/pre-send.ts", /preSendHoldCode\(/],
   ["W2 / stuckWatch.retry", "lib/stuck-watch/w2-unfulfilled.ts", /heldTicketMarker\(approval\.metadata\)/],
   ["G5 wake", "lib/slack/mention-ingress.ts", /checkOperable\(\{[^}]*phase: "wake"/],
+  ["G5 inbound notice wake", "lib/inbound-notice/intake.ts", /checkOperable\(\{[^}]*phase: "wake"/],
   ["G5 LINE account wake (LINE PoC L-4)", "lib/comm/line-ingress.ts", /checkOperable\(\{[^}]*phase: "wake"/],
   ["G5 LINE conversation wake (LINE PoC L-7)", "lib/comm/line-wake.ts", /checkOperable\(\{[^}]*phase: "wake"/],
   ["G5 MCP Events", "lib/mcp-events/principal.ts", /checkOperable\(\{[^}]*phase: "mcp_events"/],

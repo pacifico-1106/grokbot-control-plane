@@ -39,12 +39,32 @@ describe("loginErrorMessage", () => {
     expect(loginErrorMessage("login_failed", 429)).toBe(RATE_LIMITED_MESSAGE);
   });
 
+  test("login_unavailable / 503 is a generic pause, not a credential oracle", () => {
+    expect(loginErrorMessage("login_unavailable")).toMatch(/時間をおいて/);
+    expect(loginErrorMessage("login_unavailable")).not.toContain("login_unavailable");
+    expect(loginErrorMessage("login_failed", 503)).toMatch(/時間をおいて/);
+  });
+
   test("session expired banner copy", () => {
     expect(loginErrorMessage("session_expired")).toBe(SESSION_REQUIRED_MESSAGE);
     expect(loginErrorMessage("session")).toBe(SESSION_REQUIRED_MESSAGE);
     expect(isSessionNotice("session")).toBe(true);
     expect(isSessionNotice("expired")).toBe(true);
     expect(isSessionNotice("login_failed")).toBe(false);
+  });
+
+  test("account_created_login_required is the fixed post-signup copy", () => {
+    expect(loginErrorMessage("account_created_login_required")).toBe(
+      "アカウントは作成済みです。ログインしてください"
+    );
+  });
+
+  test("turnstile_required / turnstile_failed are captcha copy, not a credential oracle", () => {
+    expect(loginErrorMessage("turnstile_required")).toMatch(/ロボットでない/);
+    expect(loginErrorMessage("turnstile_failed")).toMatch(/確認に失敗/);
+    expect(loginErrorMessage("turnstile_required")).not.toContain("turnstile");
+    expect(loginErrorMessage("turnstile_failed")).not.toContain("captcha");
+    expect(loginErrorMessage("turnstile_failed")).not.toBe(LOGIN_FAILED_MESSAGE);
   });
 });
 

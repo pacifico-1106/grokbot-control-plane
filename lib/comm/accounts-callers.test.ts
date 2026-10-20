@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 const ROOT = process.cwd();
 const AI_REACHABLE = ["lib/gateway", "lib/mcp", "lib/admin-mcp", "app/api/mcp", "app/api/gateway", "app/api/admin-mcp"];
-const FORBIDDEN = /["'](?:@\/|(?:\.\.?\/)+)(?:lib\/)?comm\/(?:accounts|secret-crypto)["']/;
+const FORBIDDEN = /["'](?:@\/|(?:\.\.?\/)+)(?:lib\/)?comm\/(?:accounts|secret-crypto|line-messaging|line-webhook-setup)["']/;
 
 function walk(dir: string, out: string[] = []): string[] {
   let entries: string[] = [];
@@ -27,7 +27,7 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 describe("comm account secrets are not reachable from AI tool paths", () => {
-  test("no AI-reachable module imports lib/comm/accounts or lib/comm/secret-crypto", () => {
+  test("no AI-reachable module imports comm account secrets or LINE webhook auto-setup", () => {
     const offenders = AI_REACHABLE.flatMap((d) => walk(join(ROOT, d)))
       .filter((f) => FORBIDDEN.test(readFileSync(f, "utf8")))
       .map((f) => f.slice(ROOT.length + 1));
@@ -37,6 +37,8 @@ describe("comm account secrets are not reachable from AI tool paths", () => {
     for (const s of [`from "@/lib/comm/accounts"`, `import("@/lib/comm/secret-crypto")`, `from "../comm/accounts"`, `require('../../lib/comm/accounts')`]) {
       expect(FORBIDDEN.test(s)).toBe(true);
     }
+    expect(FORBIDDEN.test(`from "@/lib/comm/line-webhook-setup"`)).toBe(true);
+    expect(FORBIDDEN.test(`from "@/lib/comm/line-messaging"`)).toBe(true);
     expect(FORBIDDEN.test(`from "@/lib/comm/flags"`)).toBe(false);
   });
 });

@@ -41,6 +41,7 @@ describe("audit Japanese labels", () => {
     expect(Object.keys(AUDIT_ACTION_LABELS_JA).length).toBeGreaterThan(80);
     expect(AUDIT_ACTION_LABELS_JA["tool.invoke"]).toBe("操作を実行");
     expect(AUDIT_ACTION_LABELS_JA["secret_detection.blocked"]).toBe("秘密情報の送信を拒否");
+    expect(AUDIT_ACTION_LABELS_JA["admin.revoke"]).toBe("管理認証を失効");
   });
 
   test("tool.invoke uses metadata.tool; unknown ids stay opaque", () => {

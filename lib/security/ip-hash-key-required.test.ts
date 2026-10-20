@@ -10,6 +10,7 @@ import { keyedHash } from "@/lib/signup/email-normalize";
 import {
   IP_HASH_KEY_ENV,
   IpHashKeyMissingError,
+  hmacWithIpHashKey,
   isIpHashKeyConfigured,
   isIpHashKeyMissingError,
 } from "@/lib/security/ip-hash-key";
@@ -87,5 +88,14 @@ describe("IP_HASH_KEY required (no dev fallback)", () => {
   test("isIpHashKeyMissingError is false for other errors", () => {
     expect(isIpHashKeyMissingError(new Error("x"))).toBe(false);
     expect(isIpHashKeyMissingError(undefined)).toBe(false);
+  });
+
+  test("hmacWithIpHashKey is HMAC-SHA256 (not unkeyed sha256) and never echoes the IP", () => {
+    const ip = "203.0.113.9";
+    const hex = hmacWithIpHashKey(`ip:${ip}`);
+    expect(hex).toMatch(/^[0-9a-f]{32}$/);
+    expect(hex).not.toContain("203");
+    process.env.IP_HASH_KEY = "another-unit-test-key-abcdef";
+    expect(hmacWithIpHashKey(`ip:${ip}`)).not.toBe(hex);
   });
 });

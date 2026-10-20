@@ -41,7 +41,7 @@ mock.module("@/lib/lp/notification-outbox", () => ({
   processOutboxEntry: async () => undefined,
 }));
 
-const ENV = ["IP_HASH_KEY", "LP_CHAT_ENABLED", "OPENAI_API_KEY", "LP_INQUIRY_BOT_PROTECTION_ENABLED", "LP_HANDOFF_ENABLED", "LP_WAKE_WEBHOOK_ENABLED"];
+const ENV = ["IP_HASH_KEY", "LP_CHAT_ENABLED", "OPENAI_API_KEY", "LP_INQUIRY_BOT_PROTECTION_ENABLED", "LP_INQUIRY_RATE_LIMIT_ENABLED", "LP_HANDOFF_ENABLED", "LP_WAKE_WEBHOOK_ENABLED"];
 const backup = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
 afterAll(() => {
   for (const k of ENV) {
@@ -65,6 +65,7 @@ beforeEach(() => {
   process.env.LP_HANDOFF_ENABLED = "1";
   process.env.LP_WAKE_WEBHOOK_ENABLED = "1";
   delete process.env.LP_INQUIRY_BOT_PROTECTION_ENABLED;
+  delete process.env.LP_INQUIRY_RATE_LIMIT_ENABLED;
 });
 
 async function expect503(res: Response) {
@@ -123,6 +124,14 @@ describe("IP_HASH_KEY missing → 503, no write", () => {
 
   test("POST /api/lp/ai-employee/inquiry with bot protection ON → 503, no inquiry", async () => {
     process.env.LP_INQUIRY_BOT_PROTECTION_ENABLED = "true";
+    const res = await inquiry.POST(
+      new Request("https://x.example/api/lp/ai-employee/inquiry", { method: "POST", headers: IP_HEADERS, body: JSON.stringify({}) })
+    );
+    await expect503(res);
+  });
+
+  test("POST /api/lp/ai-employee/inquiry with LP_INQUIRY_RATE_LIMIT_ENABLED ON → 503, no inquiry", async () => {
+    process.env.LP_INQUIRY_RATE_LIMIT_ENABLED = "true";
     const res = await inquiry.POST(
       new Request("https://x.example/api/lp/ai-employee/inquiry", { method: "POST", headers: IP_HEADERS, body: JSON.stringify({}) })
     );

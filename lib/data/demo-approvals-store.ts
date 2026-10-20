@@ -12,6 +12,7 @@
 import {
   DEMO_APPROVALS,
   DEMO_ORG,
+  demoApprovalOrgId,
   getRuntimeApprovals,
   pushRuntimeApproval,
   pushRuntimeAuditEvent,
@@ -402,7 +403,7 @@ export async function demoCreateApproval(
   const id = `apr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
   const row: ApprovalRequest = {
     id,
-    orgId: DEMO_ORG.id,
+    orgId: demoApprovalOrgId(input.orgId),
     employeeId: input.employeeId,
     credentialId: input.credentialId,
     title: input.title,

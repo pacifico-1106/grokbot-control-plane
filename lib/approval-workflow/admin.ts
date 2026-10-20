@@ -24,6 +24,7 @@ import {
   sendVerificationToTelegramGroup,
 } from "./telegram-binding-verification";
 import { sendVerificationDmToSlackUser } from "./voter-binding-verification";
+import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 const RESEND_MIN_INTERVAL_MS = 2 * 60 * 1000;
 const RESEND_MAX_PER_24H = 10;
@@ -67,7 +68,7 @@ export async function fulfillWorkflowMutation(approval: ApprovalRequest, args: R
     const saved = employeeId ? await setEmployeeApprovalWorkflowPolicy(employeeId, approval.orgId, policy)
       : await setOrgApprovalWorkflowPolicy(approval.orgId, policy!);
     if (!saved) return { ...base, ok: false, error: "workflow_policy_write_failed" };
-    await appendAuditEvent({ orgId: approval.orgId, employeeId: employeeId || null, credentialId: null,
+    await appendAdminAuditEvent({ actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),  orgId: approval.orgId, employeeId: employeeId || null, credentialId: null,
       action: "admin.policy", purpose: "admin.policy", summary: "承認ワークフローを更新（管理MCP・人承認）",
       metadata: { approvalId: approval.id, employeeId: employeeId || null, policyId: policy?.policyId ?? null, clearOverride: clear } });
     return { ...base, ok: true, summaryJa: clear ? "社員の個別設定を解除しました" : "承認ワークフローを更新しました" };

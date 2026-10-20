@@ -31,7 +31,7 @@ import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { approvalNotSentInfo, notSentFulfillmentResult } from "@/lib/approvals/not-sent";
 import { handleDecisionRequest, type DecisionRequestInput } from "@/lib/decision-workflow";
-import { isApprovalReasonsEnabled, isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled, isTopicGatedPostingEnabled } from "@/lib/feature-flags";
+import { isApprovalReasonsEnabled, isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled, isTopicGatedPostingEnabled, isWhoamiCredentialInfoEnabled } from "@/lib/feature-flags";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import type { OrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/types";
 import { categorizeSensitiveTopics } from "@/lib/approvals/sensitive-topic-categories";
@@ -45,6 +45,9 @@ import {
   profileToolResult,
 } from "@/lib/mcp-oauth/client-compat";
 import { getOrgName } from "@/lib/mcp-oauth/org-info";
+import { getCurrentEmployeeCredential } from "@/lib/mcp-oauth/employee-state";
+import { DEMO_ORG } from "@/lib/demo-data";
+import type { WhoamiCredentialInfo, WhoamiCredentialKind } from "@/lib/mcp/whoami";
 import {
   CONFIG_CHANGE_KINDS,
   CONFIG_CHANGE_MCP_TOOL,
@@ -482,6 +485,27 @@ function toolResult(data: unknown, isError = false) {
   };
 }
 
+function whoamiAuthKind(cred: ResolvedEmployeeCredential): WhoamiCredentialKind {
+  return (cred as { authMethod?: string }).authMethod === "oauth" ? "oauth" : "gb_emp";
+}
+
+async function whoamiCallerOrgName(orgId: string): Promise<string | null> {
+  if (!orgId) return null;
+  if (isDemoMode()) return orgId === DEMO_ORG.id ? DEMO_ORG.name : null;
+  return getOrgName(orgId).catch(() => null);
+}
+
+async function whoamiCallerExpiresAt(
+  cred: ResolvedEmployeeCredential,
+  employee: { credentialExpiresAt?: string | null }
+): Promise<string | null> {
+  // Demo getCurrentEmployeeCredential always reports expiresAt: null; use the
+  // employee row so tests and the in-memory store see the 社員証 expiry.
+  if (isDemoMode()) return employee.credentialExpiresAt ?? null;
+  const current = await getCurrentEmployeeCredential(cred.employeeId);
+  return current ? current.expiresAt : employee.credentialExpiresAt ?? null;
+}
+
 /**
  * Resolve fileAttachment from MCP args.
  * Prefers top-level args.fileAttachment, falls back to payload.fileAttachment.
@@ -519,7 +543,8 @@ function resolveFileAttachment(
 export async function callStaffpassMcpTool(
   name: string,
   args: Record<string, unknown>,
-  cred: ResolvedEmployeeCredential
+  cred: ResolvedEmployeeCredential,
+  opts?: { surface?: "shared" | "badge_only" }
 ): Promise<{
   content: Array<{ type: "text"; text: string }>;
   structuredContent?: unknown;
@@ -557,6 +582,16 @@ export async function callStaffpassMcpTool(
           true
         );
       }
+      if (isWhoamiCredentialInfoEnabled() && employee.orgId !== cred.orgId) {
+        return toolResult(
+          {
+            ok: false,
+            code: "employee_not_found",
+            message: "employee not found (fail-closed)",
+          },
+          true
+        );
+      }
       const orgId = cred.orgId || employee.orgId;
       const projects = await listOrgProjects(orgId);
       let configChange: { ruleJa: string; approvedInstructions: { text: string; approvalId: string; appliedAt: string } | null } | null = null;
@@ -569,6 +604,14 @@ export async function callStaffpassMcpTool(
             : null,
         };
       }
+      let credentialInfo: WhoamiCredentialInfo | null = null;
+      if (isWhoamiCredentialInfoEnabled()) {
+        credentialInfo = {
+          kind: whoamiAuthKind(cred),
+          expiresAt: await whoamiCallerExpiresAt(cred, employee),
+          orgName: await whoamiCallerOrgName(cred.orgId),
+        };
+      }
       return toolResult(
         buildStaffpassWhoamiPayload({
           employee,
@@ -578,6 +621,7 @@ export async function callStaffpassMcpTool(
           projects,
           defaultProjectId: projects.find((item) => item.isDefault)?.id,
           configChange,
+          credentialInfo,
         })
       );
     }
@@ -916,11 +960,17 @@ export async function callStaffpassMcpTool(
               credentialGeneration: binding.credentialGeneration,
             }
           : null,
-        mcpEndpoint: "/api/mcp",
+        mcpEndpoint: opts?.surface === "badge_only" ? "/api/mcp/employee" : "/api/mcp",
         gatewayEndpoint: "/api/gateway/invoke",
         // MCP endpoint handoff ON: origin from app config (no hardcode) + absolute URL.
         ...(isMcpEndpointHandoffEnabled()
-          ? { publicOrigin: resolveAppOrigin(), mcpEndpointUrl: resolveMcpEndpointUrl() }
+          ? {
+              publicOrigin: resolveAppOrigin(),
+              mcpEndpointUrl:
+                opts?.surface === "badge_only"
+                  ? `${resolveAppOrigin()}/api/mcp/employee`
+                  : resolveMcpEndpointUrl(),
+            }
           : { publicOrigin: "https://staffpass.sealith.com" }),
       });
     }

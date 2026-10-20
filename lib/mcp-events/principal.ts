@@ -156,6 +156,7 @@ export async function checkSubscriptionPrincipal(
     const operable = await checkOperable({ orgId: sub.orgId, employeeId: sub.employeeId, phase: "mcp_events" });
     if (!operable.ok) {
       if (operable.code === "hold_state_unavailable") return unavailable("hold_state_unavailable");
+      if (operable.code === "employee_terminated") return revoked("employee_suspended");
       return { ok: false, kind: "held", reason: operable.code };
     }
     return { ok: true };

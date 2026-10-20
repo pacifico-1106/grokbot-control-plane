@@ -53,6 +53,7 @@ import {
 } from "@/lib/slack/connect-internal-base-diagnose";
 import { diagnoseLineApprovalStatus } from "@/lib/line/line-approval-status-diagnose";
 import { queueAdminTool } from "@/lib/admin-mcp/queue";
+import { closeApprovalWithoutSend } from "@/lib/data/approvals";
 import { handleSlackDmSetupTool, isSlackDmSetupTool } from "@/lib/admin-mcp/slack-dm-setup";
 import { SLACK_APPROVER_SET_TOOL, handleSlackApproverSet } from "@/lib/admin-mcp/slack-approver";
 import { SLACK_AUTHORIZE_LINK_TOOL, handleSlackAuthorizeLinkIssue } from "@/lib/admin-mcp/slack-authorize-link";
@@ -62,6 +63,14 @@ import { buildPollUrl } from "@/lib/approvals/tokens";
 import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { POSTING_IDENTITY_SET_TOOL, handlePostingIdentityTool } from "@/lib/admin-mcp/posting-identity-tool";
 import { CREDENTIAL_REISSUE_REASONS, CREDENTIAL_REISSUE_TOOL, handleCredentialReissueTool } from "@/lib/employees/credential-reissue";
+import {
+  CREDENTIAL_AUTO_RENEW_ADMIN_TOOL,
+  CREDENTIAL_AUTO_RENEW_REASONS,
+  handleCredentialAutoRenewTool,
+  isCredentialAutoRenewOnForOrg,
+  recordCredentialAutoRenewFiling,
+} from "@/lib/employees/credential-auto-renew";
+import { EMPLOYEE_RETIRE_TOOL, handleEmployeeRetireTool } from "@/lib/employees/retire";
 import {
   CHANNELS_REMOVE_TOOL_DEF,
   PARTIES_REMOVE_TOOL_DEF,
@@ -286,6 +295,37 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
       properties: {
         employeeId: { type: "string", description: "AI社員 ID (this org only)" },
         reason: { type: "string", enum: [...CREDENTIAL_REISSUE_REASONS], description: "expired = 期限切れ, expiring = 期限間近, other = その他 (default)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.credential.auto_renew",
+    description:
+      "Propose an immediate 社員証 auto-renew (employees.credential.auto_renew) after human approval (always_human, approvalClass admin). CREDENTIAL_AUTO_RENEW_ENABLED plus the org allowlist must be on (else feature_disabled). The employee must belong to this org (from the credential; no orgId argument); another org's employee → employee_not_found; a suspended / held employee is refused. Approver: owner or designated admin; owner when the employee holds a money scope (APPROVER_AUTHORITY_ENABLED). Approval only opens a 24h claimable window — the key is NEVER minted, stored, or returned (not to you, not in Slack, not in the dashboard). Do not ask anyone to paste a key into chat. Re-invoke with approvalId to read the dashboard pointer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
+        reason: { type: "string", enum: [...CREDENTIAL_AUTO_RENEW_REASONS], description: "now = 今すぐ更新 (default)" },
+        jobId: { type: "string" },
+        approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
+      },
+      required: ["employeeId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "employees.retire",
+    description:
+      "File a request to retire an AI employee (status=suspended, revoke 社員証 / OAuth / wake listeners) after human approval (always_human, approvalClass admin). EMPLOYEE_RETIRE_ENABLED must be on (else feature_disabled). This tool only files the ticket — it never executes. A credential admin of this org must open the dashboard AI社員 page and confirm 「契約終了」. The employee must belong to this org (from the credential; no orgId argument); another org's employee → employee_not_found. Approver: owner or designated admin; owner when the employee holds a money scope (APPROVER_AUTHORITY_ENABLED). AI cannot execute retirement. Re-invoke with approvalId to read the dashboard pointer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        employeeId: { type: "string", description: "AI社員 ID (this org only)" },
         jobId: { type: "string" },
         approvalId: { type: "string", description: "Re-invoke with approved ticket ID" },
       },
@@ -1597,6 +1637,14 @@ export function isAdminMcpToolName(name: string): boolean {
   return (ADMIN_MCP_TOOL_NAMES as readonly string[]).includes(name);
 }
 
+/** tools/list: hide auto_renew unless the org is on the allowlist (default OFF). */
+export function listAdminMcpToolsForOrg(orgId: string | null | undefined): McpToolDef[] {
+  return ADMIN_MCP_TOOLS.filter((tool) => {
+    if (tool.name === CREDENTIAL_AUTO_RENEW_ADMIN_TOOL) return isCredentialAutoRenewOnForOrg(orgId);
+    return true;
+  });
+}
+
 function isAdminMutationTool(name: string): boolean {
   return isAdminMcpToolName(name) && !ADMIN_READ_ONLY_TOOLS_SET.has(name);
 }
@@ -2355,6 +2403,61 @@ export async function callAdminMcpTool(
     // 社員証の再発行 (ADMIN_MCP_CREDENTIAL_REISSUE_ENABLED). Org from the credential only;
     // the ticket carries ids only and the key is minted at the dashboard hand-over.
     const outcome = await handleCredentialReissueTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    return toolResult(queued, false);
+  }
+
+  if (name === CREDENTIAL_AUTO_RENEW_ADMIN_TOOL) {
+    // 社員証の今すぐ更新 (CREDENTIAL_AUTO_RENEW_ENABLED + org allowlist).
+    // Approval opens a claimable window only — no mint, no secret.
+    const outcome = await handleCredentialAutoRenewTool(args, cred);
+    if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
+    const queued = await queueAdminTool({
+      cred,
+      tool: name,
+      args: { ...outcome.queuedArgs, ...(typeof args.jobId === "string" ? { jobId: args.jobId } : {}) },
+      rawArgsForSecretScan: args,
+      title: outcome.title,
+      summary: outcome.summary,
+    });
+    if (queued.code === "needs_approval" && queued.approvalId) {
+      const employeeId = typeof outcome.queuedArgs.employeeId === "string" ? outcome.queuedArgs.employeeId : "";
+      const recorded =
+        employeeId && outcome.oldCredentialId
+          ? await recordCredentialAutoRenewFiling({
+              orgId: cred.orgId,
+              employeeId,
+              oldCredentialId: outcome.oldCredentialId,
+              approvalId: queued.approvalId,
+              source: "admin_mcp",
+            })
+          : { ok: false as const, code: "already_pending", message: "進行中の社員証更新があります。" };
+      if (!recorded.ok) {
+        await closeApprovalWithoutSend({
+          approval: { id: queued.approvalId, orgId: cred.orgId },
+          from: ["pending"],
+          to: "superseded",
+          meta: { reason: "credential_renewal_filing_failed" },
+        }).catch(() => null);
+        return toolResult(
+          { ok: false, code: "already_pending", error: "already_pending", message: recorded.message },
+          true
+        );
+      }
+    }
+    return toolResult(queued, false);
+  }
+
+  if (name === EMPLOYEE_RETIRE_TOOL) {
+    const outcome = await handleEmployeeRetireTool(args, cred);
     if (outcome.kind === "result") return toolResult(outcome.data, outcome.isError === true);
     const queued = await queueAdminTool({
       cred,
@@ -3714,7 +3817,12 @@ export async function callAdminMcpTool(
     const parsed = validateOrgCreateInput(args);
     if (!parsed.ok) {
       return toolResult(
-        { ok: false, code: parsed.code, message: parsed.message },
+        {
+          ok: false,
+          code: parsed.code,
+          message: parsed.message,
+          ...(parsed.nextStep ? { nextStep: parsed.nextStep } : {}),
+        },
         true
       );
     }

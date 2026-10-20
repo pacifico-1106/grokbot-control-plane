@@ -1,5 +1,5 @@
 import { requireOrgAdminSession } from "@/lib/auth/require-org";
-import { appendAuditEvent } from "@/lib/data";
+import { appendAdminAuditEvent, humanAdminActor } from "@/lib/audit/admin-audit";
 import { adminAgentPublicView, linkOrgAdminAgent } from "@/lib/data/admin-agents";
 import { jsonUtf8 } from "@/lib/http/json-utf8";
 
@@ -19,14 +19,14 @@ export async function POST(req: Request) {
       grokBotAgentId: body.grokBotAgentId || "",
       grokBotWorkspaceId: body.grokBotWorkspaceId,
     });
-    await appendAuditEvent({
+    await appendAdminAuditEvent({
       orgId: gate.orgId,
       employeeId: null,
       credentialId: agent.id,
-      actorEmail: gate.email,
       action: "admin.link",
       purpose: "admin.link",
       summary: "管理エージェントを接続（人のタップ）",
+      actor: humanAdminActor(gate.email),
       metadata: { grokBotAgentId: agent.grokBotAgentId },
     });
     return jsonUtf8({ ok: true, agent: adminAgentPublicView(agent) });

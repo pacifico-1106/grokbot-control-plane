@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   evaluateSignupGuard,
   parseReferralCode,
@@ -6,6 +6,9 @@ import {
   type SignupGuardDeps,
   type SignupGuardInput,
 } from "./signup-guard";
+
+const STRICT_FLAG = "ORG_NAME_INPUT_STRICT_ENABLED";
+const savedStrict = process.env[STRICT_FLAG];
 
 const base: SignupGuardInput = {
   orgName: "株式会社テスト",
@@ -108,5 +111,138 @@ describe("signup guard: honeypot / referral / org name (observed bot pattern)", 
     expect(validateSignupOrgName("a".repeat(101)).ok).toBe(false);
     expect(validateSignupOrgName("Acme\r\nBcc: x@example.com").ok).toBe(false);
     expect(validateSignupOrgName("Ａｃｍｅ 株式会社")).toEqual({ ok: true, value: "Acme 株式会社" });
+  });
+});
+
+describe("signup guard: ORG_NAME_INPUT_STRICT_ENABLED", () => {
+  afterEach(() => {
+    if (savedStrict === undefined) delete process.env[STRICT_FLAG];
+    else process.env[STRICT_FLAG] = savedStrict;
+  });
+
+  describe("flag OFF (default)", () => {
+    beforeEach(() => {
+      delete process.env[STRICT_FLAG];
+    });
+
+    test("allows org name with bidi characters", () => {
+      const result = validateSignupOrgName("Test\u202EOrg");
+      expect(result.ok).toBe(true);
+    });
+
+    test("allows org name with URL-like string", () => {
+      const result = validateSignupOrgName("example.com Corp");
+      expect(result.ok).toBe(true);
+    });
+
+    test("uses string.length for length limit (100 surrogate pairs = 200 UTF-16 units = fail)", () => {
+      // 100 surrogate pair characters = 200 UTF-16 units
+      // Should FAIL because we count string.length when flag is OFF
+      const input = "𠮷".repeat(100);
+      expect(input.length).toBe(200);  // UTF-16 units
+      const result = validateSignupOrgName(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("100");
+    });
+
+    test("existing behavior unchanged", async () => {
+      const d = deps();
+      const r = await evaluateSignupGuard({ ...base, orgName: "株式会社テスト" }, d);
+      expect(r.ok).toBe(true);
+    });
+  });
+
+  describe("flag ON", () => {
+    beforeEach(() => {
+      process.env[STRICT_FLAG] = "true";
+    });
+
+    test("rejects org name with bidi characters", () => {
+      const result = validateSignupOrgName("Test\u202EOrg");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.message).toContain("双方向");
+        expect(result.message).not.toContain("Test");
+      }
+    });
+
+    test("rejects org name with zero-width characters", () => {
+      const result = validateSignupOrgName("Test\u200BOrg");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("不可視");
+    });
+
+    test("allows domain-like names (dots only, no dangerous patterns)", () => {
+      expect(validateSignupOrgName("example.com Corp").ok).toBe(true);
+      expect(validateSignupOrgName("Sealith.AI").ok).toBe(true);
+      expect(validateSignupOrgName("1.2.3.4 Inc").ok).toBe(true);
+    });
+
+    test("rejects www. prefix", () => {
+      const result = validateSignupOrgName("www.example.com");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("URL");
+    });
+
+    test("rejects @ sign", () => {
+      const result = validateSignupOrgName("admin@example.com");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("URL");
+    });
+
+    test("rejects slash", () => {
+      const result = validateSignupOrgName("example.com/path");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("URL");
+    });
+
+    test("rejects https:// scheme", () => {
+      const result = validateSignupOrgName("会社 https://evil.com");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("URL");
+    });
+
+    test("allows legitimate Japanese company names", () => {
+      expect(validateSignupOrgName("株式会社スペースツリー").ok).toBe(true);
+      expect(validateSignupOrgName("一般社団法人みらい社中").ok).toBe(true);
+    });
+
+    test("allows legitimate English company names", () => {
+      expect(validateSignupOrgName("TOKYO307 Inc.").ok).toBe(true);
+      expect(validateSignupOrgName("A&B Co., Ltd.").ok).toBe(true);
+    });
+
+    test("allows full-width space", () => {
+      const result = validateSignupOrgName("株式会社　テスト");
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe("株式会社 テスト");
+    });
+
+    test("uses code points for length limit (100 surrogate pairs = 100 code points = pass)", () => {
+      // 100 surrogate pair characters = 100 code points (200 UTF-16 units)
+      // Should PASS because we count code points when flag is ON
+      const input = "𠮷".repeat(100);
+      expect(input.length).toBe(200);  // UTF-16 units
+      expect([...input].length).toBe(100);  // code points
+      const result = validateSignupOrgName(input);
+      expect(result.ok).toBe(true);
+    });
+
+    test("rejects 101 surrogate pairs (101 code points > 100 limit)", () => {
+      const input = "𠮷".repeat(101);
+      const result = validateSignupOrgName(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toContain("100");
+    });
+
+    test("full guard flow rejects bidi on flag ON", async () => {
+      const d = deps();
+      const r = await evaluateSignupGuard({ ...base, orgName: "株式会社\u202Eテスト" }, d);
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toBe("invalid_org_name");
+        expect(r.message).toContain("双方向");
+      }
+    });
   });
 });

@@ -22,6 +22,7 @@
 // hot paths importing this file (notify/channels, Slack interactivity) do not
 // pick up new module edges when the flag is OFF.
 import type { sendTransactionalEmail } from "@/lib/resend";
+import { adminActorMetadata, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import type { AuditEvent } from "@/lib/types";
 
 function parseFlag(value: string | undefined): boolean {
@@ -133,13 +134,36 @@ export async function alertApprovalDeliveryFailure(input: {
 
     const event = kind === "button_failed" ? "approval_button.failed" : "approval_delivery.failed";
     const labelJa = kind === "button_failed" ? "承認ボタンを処理できませんでした" : "承認依頼を届けられませんでした";
-    const write = writerOverride ?? (await import("@/lib/data/audit")).appendAuditEvent;
+    const write = async (event: {
+      orgId: string;
+      employeeId?: string | null;
+      credentialId?: string | null;
+      summary: string;
+      metadata: Record<string, unknown>;
+    }) => {
+      const actor = await resolveAdminAuditActor({
+        orgId: event.orgId,
+        fallbackHuman: { email: "approval_delivery_alert" },
+      });
+      const metadata = { ...event.metadata, ...adminActorMetadata(actor) };
+      const row = {
+        orgId: event.orgId,
+        employeeId: event.employeeId ?? null,
+        credentialId: event.credentialId ?? null,
+        action: "admin.notificationChannel" as const,
+        purpose: "admin.notificationChannel",
+        summary: event.summary,
+        actorEmail: actor.actorKind === "human" ? actor.actorEmail : undefined,
+        metadata,
+      };
+      if (writerOverride) {
+        await writerOverride(row);
+        return;
+      }
+      await appendAdminAuditEvent({ ...row, actor });
+    };
     await write({
       orgId,
-      employeeId: null,
-      credentialId: null,
-      action: "admin.notificationChannel",
-      purpose: "admin.notificationChannel",
       summary: `${labelJa}（${provider} / ${reason}）。承認はされていません`,
       metadata: {
         auditClass: "admin",
@@ -210,10 +234,6 @@ export async function alertApprovalDeliveryFailure(input: {
     if (opsOrgId && opsOrgId !== orgId) {
       await write({
         orgId: opsOrgId,
-        employeeId: null,
-        credentialId: null,
-        action: "admin.notificationChannel",
-        purpose: "admin.notificationChannel",
         summary: `テナントの${labelJa}（${reason}）`,
         metadata: {
           auditClass: "admin",

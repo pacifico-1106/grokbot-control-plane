@@ -6,18 +6,26 @@
  * - SIGNUP_ATTEMPT_LOG_ENABLED  → write public.signup_attempts rows
  * - SIGNUP_RATE_LIMIT_ENABLED   → per-IP / per-mailbox / global limits (reads the log)
  * - SIGNUP_DOMAIN_CHECK_ENABLED → reject disposable domains, invalid dots, normalized duplicates
+ * - SIGNUP_RATE_LIMIT_REQUIRED_ENABLED → Layer 2 limits are mandatory and
+ *   fail-closed (no account, no welcome / trial mail) if the store is down
  *
- * Rate limiting fails OPEN on DB errors (logged): it is an availability-only
+ * Rate limiting fails OPEN on DB errors (logged) unless
+ * SIGNUP_RATE_LIMIT_REQUIRED_ENABLED is ON: then it is an availability-only
  * control behind fail-closed Turnstile, and must not lock out real signups
- * during a DB incident.
+ * during a DB incident — except when REQUIRED is ON, in which case we refuse
+ * rather than send signed mail to an attacker-chosen mailbox.
  */
 import {
   isSignupAttemptLogEnabled,
   isSignupDomainCheckEnabled,
   isSignupRateLimitEnabled,
+  isSignupRateLimitRequiredEnabled,
 } from "@/lib/feature-flags";
+import { trustedClientIp } from "@/lib/security/client-ip";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { keyedHash, normalizeEmail, type EmailSignal } from "./email-normalize";
+
+export { trustedClientIp };
 
 export type SignupOutcome =
   | "created"
@@ -59,21 +67,6 @@ export const SIGNUP_RATE_LIMITS = {
   duplicateWindowDays: 30,
 } as const;
 
-/**
- * Client IP for rate limiting. Prefers headers set by the Vercel edge
- * (x-vercel-forwarded-for / x-real-ip) over client-controllable ones.
- * cf-connecting-ip is deliberately ignored: this app is not behind Cloudflare,
- * so that header is attacker-controlled.
- */
-export function trustedClientIp(req: Request): string | null {
-  const vercel = req.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim();
-  if (vercel) return vercel;
-  const real = req.headers.get("x-real-ip")?.trim();
-  if (real) return real;
-  const xff = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return xff || null;
-}
-
 export type SignupFingerprint = {
   ipHash: string | null;
   uaHash: string | null;
@@ -96,7 +89,12 @@ export function fingerprintSignup(req: Request, email: string): SignupFingerprin
 }
 
 export function anySignupLayer2Enabled(): boolean {
-  return isSignupAttemptLogEnabled() || isSignupRateLimitEnabled() || isSignupDomainCheckEnabled();
+  return (
+    isSignupAttemptLogEnabled() ||
+    isSignupRateLimitEnabled() ||
+    isSignupDomainCheckEnabled() ||
+    isSignupRateLimitRequiredEnabled()
+  );
 }
 
 export async function recordSignupAttempt(
@@ -104,8 +102,11 @@ export async function recordSignupAttempt(
   fp: SignupFingerprint,
   outcome: SignupOutcome,
   extra: { reason?: string | null; turnstileOk?: boolean | null; honeypot?: boolean; orgId?: string | null; userId?: string | null } = {}
-): Promise<void> {
-  if (!store || !isSignupAttemptLogEnabled()) return;
+): Promise<{ ok: boolean }> {
+  const required = isSignupRateLimitRequiredEnabled();
+  const shouldWrite = isSignupAttemptLogEnabled() || required;
+  if (!shouldWrite) return { ok: true };
+  if (!store) return { ok: !required };
   const reason = extra.reason ? extra.reason.toLowerCase().replace(/[^a-z0-9_:.-]/g, "_").slice(0, 64) : null;
   try {
     await store.insert({
@@ -121,8 +122,10 @@ export async function recordSignupAttempt(
       org_id: extra.orgId ?? null,
       user_id: extra.userId ?? null,
     });
+    return { ok: true };
   } catch (e) {
     console.warn("[signup-attempts] insert failed", e instanceof Error ? e.message : "unknown");
+    return { ok: !required };
   }
 }
 
@@ -159,7 +162,28 @@ export async function evaluateSignupLayer2(
     }
   }
 
-  if (isSignupRateLimitEnabled() && store) {
+  const required = isSignupRateLimitRequiredEnabled();
+  const rateLimitOn = isSignupRateLimitEnabled() || required;
+  if (required && !store) {
+    return {
+      ok: false,
+      outcome: "rate_limited",
+      reason: "store_unavailable",
+      status: 503,
+      message: "現在、新規登録を一時停止しています。時間をおいてお試しください。",
+    };
+  }
+  if (required && !fp.ipHash) {
+    return {
+      ok: false,
+      outcome: "rate_limited",
+      reason: "ip_unavailable",
+      status: 503,
+      message: "現在、新規登録を一時停止しています。時間をおいてお試しください。",
+    };
+  }
+
+  if (rateLimitOn && store) {
     const iso = (ms: number) => new Date(now.getTime() - ms).toISOString();
     try {
       if (fp.ipHash) {
@@ -179,6 +203,16 @@ export async function evaluateSignupLayer2(
           message: "現在登録が混み合っています。時間をおいて再度お試しください。" };
       }
     } catch (e) {
+      if (required) {
+        console.warn("[signup-attempts] rate limit check failed (fail-closed)", e instanceof Error ? e.message : "unknown");
+        return {
+          ok: false,
+          outcome: "rate_limited",
+          reason: "store_unavailable",
+          status: 503,
+          message: "現在、新規登録を一時停止しています。時間をおいてお試しください。",
+        };
+      }
       console.warn("[signup-attempts] rate limit check failed (fail-open)", e instanceof Error ? e.message : "unknown");
     }
   }

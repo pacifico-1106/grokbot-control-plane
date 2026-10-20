@@ -132,6 +132,11 @@ ADDITIVE = [
      " and to_regprocedure('public.release_credential_reissue(uuid,uuid,text)') is null"),
     # LP setup-fee payment record (PR3 dry-run, LP_AUTO_PROVISION_MODE).
     ("20261012400000_", "tests/security/db-lp-provisionings.sql", ("lp_provisionings", "lp_provisioning_events")),
+    # Hold-release actor_email follow-up: listed before 20261012500000 (whose
+    # rollback/re-apply recreates the function without actor_email).
+    ("20261016300000_", "tests/security/db-hold-release-actor-email.sql",
+     "position('actor_email_from_member' in pg_get_functiondef("
+     "'public.release_employee_hold(uuid,uuid,text,jsonb,timestamptz)'::regprocedure)) = 0"),
     # 緊急停止 hold (S1): table + 4 columns + 3 functions; rollback drops them all.
     ("20261012500000_", "tests/security/db-employee-holds.sql",
      "to_regclass('public.employee_holds') is null"
@@ -159,6 +164,25 @@ ADDITIVE = [
      ("employee_comm_accounts", "employee_comm_account_secrets", "comm_inbound_events", "comm_link_code_failures", "comm_link_code_locks")),
     ("20261010200000_", "tests/security/db-mcp-oauth.sql", ("oauth_clients", "oauth_authorization_requests", "oauth_grants",
      "oauth_authorization_codes", "oauth_access_tokens", "oauth_refresh_tokens", "oauth_rate_limits")),
+    # /api/mcp auth-failure audit + last_used_at touch (table + 2 RPCs).
+    ("20261016400000_", "tests/security/db-mcp-auth-failures.sql",
+     "to_regclass('public.mcp_auth_failures') is null"
+     " and to_regprocedure('public.record_mcp_auth_failure(text,uuid,uuid,uuid,text)') is null"
+     " and to_regprocedure('public.touch_credential_last_used(uuid)') is null"),
+    # R3 child first: roll back overlap RPCs before R1 drops credential_renewals.
+    ("20261020100000_", "tests/security/db-credential-auto-renew-overlap.sql",
+     "to_regprocedure('public.attach_overlapped_new_credential(uuid,uuid,text,uuid,timestamptz)') is null"
+     " and to_regprocedure('public.revoke_expired_overlapped_old_credential(uuid,uuid,uuid,uuid,timestamptz)') is null"
+     " and to_regprocedure('public.complete_overlapped_credential_switchover(uuid,uuid,uuid,uuid,uuid,boolean)') is null"
+     " and to_regprocedure('public.issue_overlapped_new_credential(uuid,uuid,uuid,text,text,text,timestamptz,timestamptz,text[],text[],text,jsonb,jsonb,jsonb)') is null"
+     " and to_regclass('public.credential_renewals') is not null"),
+    # 社員証 auto-renew (R1): table + 3 RPCs + same-org trigger fn.
+    ("20261019100000_", "tests/security/db-credential-auto-renew.sql",
+     "to_regclass('public.credential_renewals') is null"
+     " and to_regprocedure('public.claim_credential_renewal(uuid,uuid,uuid,text,timestamptz)') is null"
+     " and to_regprocedure('public.release_credential_renewal(uuid,uuid,text)') is null"
+     " and to_regprocedure('public.revoke_overlapped_old_credential(uuid,uuid,uuid,uuid)') is null"
+     " and to_regprocedure('public.credential_renewals_same_org()') is null"),
 ]
 
 # Un-timestamped legacy names do not sort in dependency order (see

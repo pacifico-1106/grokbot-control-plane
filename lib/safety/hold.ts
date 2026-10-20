@@ -32,13 +32,13 @@ export type HoldPhase =
   | "mcp_events" // G5
   | "pre_send"; // just before an outbound adapter call
 
-export type HoldDenyCode = "employee_on_hold" | "org_on_hold" | "hold_state_unavailable";
+export type HoldDenyCode = "employee_on_hold" | "org_on_hold" | "hold_state_unavailable" | "employee_terminated";
 export type OperableResult =
   | { ok: true }
   | { ok: false; code: HoldDenyCode; holdId: string | null; kind: HoldKind | null };
 
 export type HoldRead =
-  | { state: "found"; orgId: string; holdState: string | null; holdId: string | null }
+  | { state: "found"; orgId: string; holdState: string | null; holdId: string | null; status?: string | null }
   | { state: "missing" }
   | { state: "error"; detail: string }
   /** The S1 migration is not applied yet (wrong-order deploy). See isHoldSchemaMissing. */
@@ -86,7 +86,7 @@ function demoReader(): HoldReader {
       const h = demoEmployeeHolds.get(employeeId);
       const { getEmployeeById } = await import("@/lib/data/employees");
       const e = await getEmployeeById(employeeId).catch(() => null);
-      return { state: "found", orgId: e?.orgId ?? orgHint ?? "", holdState: h?.kind ?? null, holdId: h?.holdId ?? null };
+      return { state: "found", orgId: e?.orgId ?? orgHint ?? "", holdState: h?.kind ?? null, holdId: h?.holdId ?? null, status: e?.status ?? "active" };
     },
     async org(orgId) {
       const h = demoOrgHolds.get(orgId);
@@ -263,11 +263,11 @@ function supabaseReader(): HoldReader {
     async employee(employeeId) {
       const admin = createSupabaseAdminClient();
       if (!admin) return { state: "error", detail: "db_unavailable" };
-      const { data, error } = await admin.from("employees").select("id, org_id, hold_state, hold_id").eq("id", employeeId).maybeSingle();
+      const { data, error } = await admin.from("employees").select("id, org_id, hold_state, hold_id, status").eq("id", employeeId).maybeSingle();
       if (error) return isHoldSchemaMissing(error) ? schemaMissingVerdict(admin, "employees") : { state: "error", detail: "employee_read_error" };
       if (!data) return { state: "missing" };
       const r = data as Record<string, unknown>;
-      return { state: "found", orgId: String(r.org_id ?? ""), holdState: (r.hold_state as string | null) ?? null, holdId: (r.hold_id as string | null) ?? null };
+      return { state: "found", orgId: String(r.org_id ?? ""), holdState: (r.hold_state as string | null) ?? null, holdId: (r.hold_id as string | null) ?? null, status: typeof r.status === "string" ? r.status : null };
     },
     async org(orgId) {
       const admin = createSupabaseAdminClient();
@@ -423,9 +423,13 @@ export async function checkOperable(input: {
         else {
           sawInstalled = true;
           orgId = orgId || e.orgId;
-          const s = shapeOf(e, KINDS);
-          if (s === "bad") result = unavailable();
-          else if (s === "held") result = { ok: false, code: "employee_on_hold", holdId: e.holdId, kind: e.holdState as HoldKind };
+          if (e.status === "suspended") {
+            result = { ok: false, code: "employee_terminated", holdId: null, kind: null };
+          } else {
+            const s = shapeOf(e, KINDS);
+            if (s === "bad") result = unavailable();
+            else if (s === "held") result = { ok: false, code: "employee_on_hold", holdId: e.holdId, kind: e.holdState as HoldKind };
+          }
         }
       }
       if (result.ok || result.code === "employee_on_hold") {
@@ -473,7 +477,7 @@ export async function assertOperable(input: Parameters<typeof checkOperable>[0])
 }
 
 /** Hold-related refusal codes (all stop before any provider call). */
-export const HOLD_STOP_CODES: ReadonlySet<string> = new Set(["employee_on_hold", "org_on_hold", "hold_state_unavailable", "approval_held"]);
+export const HOLD_STOP_CODES: ReadonlySet<string> = new Set(["employee_on_hold", "org_on_hold", "hold_state_unavailable", "approval_held", "employee_terminated"]);
 
 // ---------------------------------------------------------------------------
 // Held tickets

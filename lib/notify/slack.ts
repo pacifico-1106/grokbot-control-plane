@@ -220,6 +220,8 @@ function approvalBlocks(
   const voteHint = options?.workflow
     ? "（あなたの1票を投じます）"
     : "";
+  const tool = String(approval.metadata?.adminTool || approval.tool || "");
+  const hideRevise = tool === "employees.credential.auto_renew";
   return [
     section,
     {
@@ -239,12 +241,16 @@ function approvalBlocks(
           action_id: "staffpass_reject",
           value,
         },
-        {
-          type: "button",
-          text: { type: "plain_text", text: "修正依頼" },
-          action_id: "staffpass_revise",
-          value,
-        },
+        ...(hideRevise
+          ? []
+          : [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "修正依頼" },
+                action_id: "staffpass_revise",
+                value,
+              },
+            ]),
         {
           type: "button",
           text: { type: "plain_text", text: "ダッシュボード" },

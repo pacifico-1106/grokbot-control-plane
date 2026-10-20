@@ -2,6 +2,41 @@ import { createSupabaseAdminClient } from "../supabase";
 import { isAdminClassApproval } from "../admin-mcp/audit-class";
 import { parseAdminRequester } from "../admin-mcp/self-approval";
 
+/** Old tickets omitted credentialGeneration. After a reissue they must not stay valid. */
+export function isLegacyAdminRequesterStillValid(input: {
+  credentialGeneration: number | undefined;
+  currentGeneration: number;
+  hasReissueAudit: boolean;
+}): boolean {
+  if (input.credentialGeneration !== undefined) {
+    return (
+      Number.isSafeInteger(input.credentialGeneration) &&
+      input.credentialGeneration === input.currentGeneration
+    );
+  }
+  return input.currentGeneration <= 1 && !input.hasReissueAudit;
+}
+
+function isAdminCredentialReissueAudit(event: {
+  action: string;
+  metadata?: Record<string, unknown> | null;
+}): boolean {
+  const meta = event.metadata || {};
+  if (event.action === "admin.issue_admin_credential") {
+    return Number(meta.issuedGeneration ?? meta.generation) > 1;
+  }
+  if (event.action === "admin.link" && meta.prefix === "gb_adm_") {
+    return Number(meta.generation) > 1;
+  }
+  return false;
+}
+
+async function hasAdminCredentialReissueAudit(orgId: string): Promise<boolean> {
+  const { listAuditEvents } = await import("@/lib/data/audit");
+  const events = await listAuditEvents(orgId, 200);
+  return events.some(isAdminCredentialReissueAudit);
+}
+
 /** Recheck current authority at poll/decision/delivery time, not just at issue. */
 export async function isApprovalAuthorityCurrent(input: {
   orgId: string; employeeId: string; credentialId: string;
@@ -19,12 +54,20 @@ export async function isApprovalAuthorityCurrent(input: {
     if (error || !agent || !["linked", "unlinked"].includes(agent.status) ||
         !agent.credential_fingerprint || agent.credential_generation < 1) return false;
     if (requester.grokBotAgentId && requester.grokBotAgentId !== agent.grok_bot_agent_id) return false;
-    // Old tickets did not snapshot the generation. Preserve their existing
-    // polling contract; do not infer a historical generation during migration.
-    // Rotation invalidation is guaranteed only for new generation-bound tickets.
-    return requester.credentialGeneration === undefined ||
-      (Number.isSafeInteger(requester.credentialGeneration) &&
-       requester.credentialGeneration === agent.credential_generation);
+    const currentGeneration = Number(agent.credential_generation);
+    if (requester.credentialGeneration === undefined) {
+      if (currentGeneration > 1) return false;
+      const hasReissueAudit = await hasAdminCredentialReissueAudit(input.orgId).catch(() => false);
+      return isLegacyAdminRequesterStillValid({
+        credentialGeneration: undefined,
+        currentGeneration,
+        hasReissueAudit,
+      });
+    }
+    return (
+      Number.isSafeInteger(requester.credentialGeneration) &&
+      requester.credentialGeneration === currentGeneration
+    );
   }
   if (!input.employeeId || !input.credentialId) return false;
   const { data: credential, error } = await admin.from("credentials")

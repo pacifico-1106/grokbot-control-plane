@@ -564,6 +564,7 @@ export function resolveRuntimeApproval(
 }
 
 export type CreateRuntimeApprovalInput = {
+  orgId?: string;
   employeeId: string;
   credentialId: string;
   title: string;
@@ -579,6 +580,14 @@ export type CreateRuntimeApprovalInput = {
   metadata?: Record<string, unknown>;
 };
 
+/** Preserve UUID orgs (allowlist tests). Non-UUID demo orgs stay DEMO_ORG.id. */
+export function demoApprovalOrgId(orgId?: string | null): string {
+  return typeof orgId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(orgId)
+    ? orgId
+    : DEMO_ORG.id;
+}
+
 export function pushRuntimeApproval(
   input: CreateRuntimeApprovalInput
 ): ApprovalRequest {
@@ -586,7 +595,7 @@ export function pushRuntimeApproval(
   const statusToken = input.statusToken || generateStatusToken();
   const row: ApprovalRequest = {
     id,
-    orgId: DEMO_ORG.id,
+    orgId: demoApprovalOrgId(input.orgId),
     employeeId: input.employeeId,
     credentialId: input.credentialId,
     title: input.title,
@@ -660,6 +669,7 @@ export function pushRuntimeAuditEvent(
     orgId: event.orgId,
     employeeId: event.employeeId,
     credentialId: event.credentialId,
+    actorEmail: event.actorEmail ?? null,
     action: event.action,
     purpose: event.purpose,
     summary: event.summary,

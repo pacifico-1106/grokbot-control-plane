@@ -474,6 +474,14 @@ export type AuditAction =
   | "credential.issued"
   | "credential.revoked"
   | "credential.rotated"
+  /** CREDENTIAL_AUTO_RENEW_ENABLED: 今すぐ更新 ticket. Ids + timestamps only — never secret / claim_token. */
+  | "credential.renew_proposed"
+  | "credential.renew_approved"
+  | "credential.renew_rejected"
+  | "credential.renew_skipped_hold"
+  | "credential.renew_claimed"
+  | "credential.renew_claim_denied"
+  | "credential.renew_old_revoked"
   /** CREDENTIAL_EXPIRY_NOTICE_ENABLED: pre-expiry notice sent / failed. Metadata: ids, thresholds, counts only. */
   | "credential.expiry_notice"
   /** MCP OAuth (flag MCP_OAUTH_ENABLED). Metadata: client host, grant id, hash prefixes only. */
@@ -554,6 +562,10 @@ export type AuditAction =
   | "slack.file_egress_denied"
   | "sns.publish_failed"
   | "slack.mention_wake"
+  /** Inbound call notice prototype (INBOUND_CALL_NOTICE_ENABLED). Metadata: ids + masked phone only — never body/要約. */
+  | "inbound_notice.wake"
+  | "inbound_notice.sales_skipped"
+  | "inbound_notice.rejected"
   /** L-7: per-employee LINE 1:1 conversation wake. Metadata: ids / eventKey only — never the body. */
   | "line.conversation_wake"
   | "slack.internal_im_wake"
@@ -603,6 +615,7 @@ export type AuditAction =
   | "admin.notificationChannel"
   | "admin.create_org"
   | "admin.issue_admin_credential"
+  | "admin.revoke"
   | "admin.proxy_approve"
   | "admin.org_patch"
   | "admin.billing"
@@ -966,7 +979,8 @@ export type ExecutableDenyCode =
   | "not_found"
   | "employee_on_hold"
   | "org_on_hold"
-  | "hold_state_unavailable";
+  | "hold_state_unavailable"
+  | "employee_terminated";
 
 export interface ExecutableDeny {
   ok: false;

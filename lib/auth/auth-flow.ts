@@ -6,6 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import { resolveAppOrigin } from "../app-url";
+import { trustedClientIpFromHeaders } from "@/lib/security/client-ip";
 
 /** Email link types this app accepts. Signup confirmation / email_change are not used. */
 export const EMAIL_LINK_TYPES = ["invite", "recovery", "magiclink"] as const;
@@ -115,11 +116,7 @@ export function isSameOriginRequest(
 }
 
 export function clientIp(headers: Pick<Headers, "get">): string {
-  return (
-    headers.get("x-real-ip")?.trim() ||
-    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "unknown"
-  );
+  return trustedClientIpFromHeaders(headers) || "unknown";
 }
 
 export function rateKey(...parts: string[]): string {
@@ -128,11 +125,15 @@ export function rateKey(...parts: string[]): string {
 
 type Bucket = { count: number; resetAt: number };
 const buckets = new Map<string, Bucket>();
-const MAX_BUCKETS = 10_000;
+const DEFAULT_MAX_BUCKETS = 10_000;
+let maxBuckets = DEFAULT_MAX_BUCKETS;
 
 /**
  * Cheap per-instance fixed-window limiter (best effort on serverless; Supabase
  * Auth also enforces its own email + verify rate limits server-side).
+ *
+ * Store overflow fails closed: expired buckets are evicted, but a full map is
+ * never cleared (that would fail open and reset every attacker budget).
  */
 export function takeRateLimit(
   key: string,
@@ -142,9 +143,9 @@ export function takeRateLimit(
 ): boolean {
   const b = buckets.get(key);
   if (!b || b.resetAt <= now) {
-    if (buckets.size >= MAX_BUCKETS) {
+    if (buckets.size >= maxBuckets) {
       for (const [k, v] of buckets) if (v.resetAt <= now) buckets.delete(k);
-      if (buckets.size >= MAX_BUCKETS) buckets.clear();
+      if (buckets.size >= maxBuckets) return false;
     }
     buckets.set(key, { count: 1, resetAt: now + windowMs });
     return true;
@@ -156,6 +157,10 @@ export function takeRateLimit(
 
 export function resetRateLimitsForTest(): void {
   buckets.clear();
+}
+
+export function setMaxBucketsForTest(n: number | null): void {
+  maxBuckets = n == null ? DEFAULT_MAX_BUCKETS : n;
 }
 
 export function isPlausibleEmail(raw: string): boolean {

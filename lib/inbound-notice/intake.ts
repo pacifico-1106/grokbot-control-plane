@@ -1,0 +1,413 @@
+/**
+ * Shared inbound-notice intake. Vendor adapters parse; this module verifies
+ * source, applies sales/emergency policy, and wakes through the existing
+ * webhook + hold + audit path. Sends still go through the approval gateway
+ * (this module never invokes it).
+ */
+import { appendAuditEvent } from "@/lib/data/audit";
+import { getBinding, getWakeWebhookSecret } from "@/lib/data/bindings";
+import { getOrgChannel } from "@/lib/data/directory";
+import { getEmployee } from "@/lib/data/employees";
+import { getEmployeeSlackIdentity } from "@/lib/data/slack-identities";
+import { isInboundCallNoticeEnabled } from "@/lib/inbound-notice/flags";
+import { readInboundNoticeConfig } from "@/lib/inbound-notice/config";
+import { parseWithAdapters } from "@/lib/inbound-notice/adapters";
+import { verifyInboundNoticeSource } from "@/lib/inbound-notice/accept";
+import { inboundNoticeDedupKey, inboundNoticeJobId } from "@/lib/inbound-notice/dedup";
+import { isYes } from "@/lib/inbound-notice/parse";
+import { last4Digits, maskPhoneForAudit, redactPhoneInText } from "@/lib/inbound-notice/phone";
+import {
+  isPhoneHashKeyConfigured,
+  isPhoneHashKeyMissingError,
+} from "@/lib/inbound-notice/phone-hash-key";
+import { fenceUntrustedFields } from "@/lib/inbound-notice/untrusted";
+import { INBOUND_NOTICE_SCHEMA } from "@/lib/inbound-notice/types";
+import { mcpHandoffWakeAuditMeta, withMcpHandoff } from "@/lib/mcp/endpoint-handoff";
+import { checkOperable, takeWakeSuppressedAuditSlot, type OperableResult } from "@/lib/safety/hold";
+import { recordThreadWake } from "@/lib/thread-guard/guard";
+import { withLinkLocalGuard } from "@/lib/webhooks/link-local-guard";
+
+const WAKE_TIMEOUT_MS = 8_000;
+const PURPOSE = "inbound_notice";
+
+export const SOURCE_NOTICE_NOTE_JA =
+  "電話番号の全文はこの Slack 投稿を、既存の承認付きツールで読んでください。wake には下 4 桁だけあります。";
+
+export type InboundNoticeSlackEvent = {
+  teamId: string;
+  eventId: string;
+  channelId: string;
+  ts: string;
+  threadTs: string | null;
+  text: string;
+  botId: string;
+  appId: string;
+  subtype?: string;
+  authorTeamId?: string;
+  extSharedChannel?: boolean;
+};
+
+export type InboundNoticeAudit = Parameters<typeof appendAuditEvent>[0];
+
+export type InboundNoticeDeps = {
+  now: () => Date;
+  getOrgChannel: (orgId: string, surface: "slack", externalId: string) => Promise<{ orgId: string } | null>;
+  getEmployee: (id: string, orgId: string) => Promise<{ id: string; orgId: string } | null>;
+  getEmployeeSlackTeamId: (employeeId: string) => Promise<string>;
+  getBinding: typeof getBinding;
+  getWakeWebhookSecret: typeof getWakeWebhookSecret;
+  fetch: typeof fetch;
+  checkOperable: (i: { orgId?: string | null; employeeId?: string | null; phase: "wake" }) => Promise<OperableResult>;
+  appendAudit: (e: InboundNoticeAudit) => Promise<unknown>;
+  recordThreadWake: typeof recordThreadWake;
+  claimDedup: (key: string) => Promise<boolean>;
+};
+
+async function defaultClaimDedup(key: string): Promise<boolean> {
+  const { claimSlackMentionEvent } = await import("@/lib/slack/mention-ingress");
+  return claimSlackMentionEvent(key);
+}
+
+const defaultDeps: InboundNoticeDeps = {
+  now: () => new Date(),
+  getOrgChannel: async (orgId, surface, externalId) => getOrgChannel(orgId, surface, externalId),
+  getEmployee: async (id, orgId) => getEmployee(id, orgId),
+  getEmployeeSlackTeamId: async (employeeId) => {
+    const ident = await getEmployeeSlackIdentity(employeeId);
+    return ident?.slackTeamId ?? "";
+  },
+  getBinding,
+  getWakeWebhookSecret,
+  fetch: (...args) => globalThis.fetch(...args),
+  checkOperable: (i) => checkOperable(i),
+  appendAudit: (e) => appendAuditEvent(e),
+  recordThreadWake,
+  claimDedup: defaultClaimDedup,
+};
+
+export type InboundNoticeOutcome = {
+  handled: boolean;
+  woke: number;
+  skipReason?: string;
+};
+
+function phoneMeta(phone: string | null): { phoneLast4: string | null; phoneHash: string | null } {
+  return maskPhoneForAudit(phone);
+}
+
+export async function handleInboundNotice(
+  event: InboundNoticeSlackEvent,
+  deps: Partial<InboundNoticeDeps> = {}
+): Promise<InboundNoticeOutcome> {
+  if (!isInboundCallNoticeEnabled()) {
+    return { handled: false, woke: 0, skipReason: "feature_flag_off" };
+  }
+  const d = { ...defaultDeps, ...deps };
+  if (!isPhoneHashKeyConfigured()) {
+    const config = readInboundNoticeConfig();
+    await d.appendAudit({
+      orgId: config?.orgId ?? "",
+      employeeId: config?.employeeId ?? null,
+      credentialId: null,
+      action: "inbound_notice.rejected",
+      purpose: PURPOSE,
+      summary: "inbound_notice_rejected",
+      metadata: { reason: "phone_hash_key_missing", eventId: event.eventId, channel: event.channelId },
+    }).catch(() => undefined);
+    return { handled: true, woke: 0, skipReason: "phone_hash_key_missing" };
+  }
+  const config = readInboundNoticeConfig();
+  if (!config) {
+    return { handled: true, woke: 0, skipReason: "config_missing" };
+  }
+
+  const parsed = parseWithAdapters(event.text);
+  if (!parsed) {
+    return { handled: false, woke: 0, skipReason: "not_inbound_notice" };
+  }
+
+  const employee = await d.getEmployee(config.employeeId, config.orgId);
+  const channel = await d.getOrgChannel(config.orgId, "slack", event.channelId);
+  const employeeTeam = await d.getEmployeeSlackTeamId(config.employeeId);
+  const source = verifyInboundNoticeSource({
+    orgId: config.orgId,
+    employeeId: employee?.id ?? "",
+    employeeOrgId: employee?.orgId ?? "",
+    employeeSlackTeamId: employeeTeam,
+    teamId: event.teamId,
+    authorTeamId: event.authorTeamId ?? "",
+    extSharedChannel: Boolean(event.extSharedChannel),
+    channelId: event.channelId,
+    channelRegistered: Boolean(channel),
+    channelOrgId: channel?.orgId ?? "",
+    botId: event.botId,
+    appId: event.appId,
+    allowedChannelIds: config.channelIds,
+    allowedBotIds: config.botIds,
+    allowedAppIds: config.appIds,
+    expectedOrgId: config.orgId,
+    expectedTeamId: config.slackTeamId,
+    expectedEmployeeId: config.employeeId,
+  });
+  let phone: { phoneLast4: string | null; phoneHash: string | null };
+  try {
+    phone = phoneMeta(parsed.fields.phone);
+  } catch (err) {
+    if (isPhoneHashKeyMissingError(err)) {
+      await d.appendAudit({
+        orgId: config.orgId,
+        employeeId: employee?.id ?? null,
+        credentialId: null,
+        action: "inbound_notice.rejected",
+        purpose: PURPOSE,
+        summary: "inbound_notice_rejected",
+        metadata: { reason: "phone_hash_key_missing", eventId: event.eventId, channel: event.channelId },
+      }).catch(() => undefined);
+      return { handled: true, woke: 0, skipReason: "phone_hash_key_missing" };
+    }
+    throw err;
+  }
+  if (!source.ok) {
+    await d.appendAudit({
+      orgId: config.orgId,
+      employeeId: employee?.id ?? null,
+      credentialId: null,
+      action: "inbound_notice.rejected",
+      purpose: PURPOSE,
+      summary: "inbound_notice_rejected",
+      metadata: {
+        reason: source.reason,
+        eventId: event.eventId,
+        channel: event.channelId,
+        ...phone,
+      },
+    }).catch(() => undefined);
+    return { handled: true, woke: 0, skipReason: source.reason };
+  }
+
+  const dedupKey = inboundNoticeDedupKey(event.channelId, event.ts);
+  if (!dedupKey) {
+    return { handled: true, woke: 0, skipReason: "dedup_key_missing" };
+  }
+  const claimed = await d.claimDedup(dedupKey);
+  if (!claimed) {
+    return { handled: true, woke: 0, skipReason: "duplicate" };
+  }
+
+  const isSalesCall = isYes(parsed.fields.salesCall);
+  const isEmergency = isYes(parsed.fields.emergency);
+  const priority = isEmergency ? "high" : "normal";
+  const orgId = config.orgId;
+  const employeeId = config.employeeId;
+  const jobId = inboundNoticeJobId(event.channelId, event.ts);
+
+  if (isSalesCall) {
+    await d.appendAudit({
+      orgId,
+      employeeId,
+      credentialId: null,
+      action: "inbound_notice.sales_skipped",
+      purpose: PURPOSE,
+      summary: "sales_call_notice_audit_only",
+      metadata: {
+        reason: "sales_skipped",
+        eventId: event.eventId,
+        channel: event.channelId,
+        ts: event.ts,
+        jobId,
+        source: parsed.source,
+        adapterId: parsed.adapterId,
+        ...phone,
+      },
+    }).catch(() => undefined);
+    return { handled: true, woke: 0, skipReason: "sales_call" };
+  }
+
+  let operable: OperableResult;
+  try {
+    operable = await d.checkOperable({ orgId, employeeId, phase: "wake" });
+  } catch {
+    operable = { ok: false, code: "hold_state_unavailable", holdId: null, kind: null };
+  }
+  if (!operable.ok) {
+    const slot = takeWakeSuppressedAuditSlot(`${orgId}:${employeeId}:${operable.code}`);
+    if (slot.write) {
+      await d.appendAudit({
+        orgId,
+        employeeId,
+        credentialId: null,
+        action: "employee.hold.wake_suppressed",
+        purpose: PURPOSE,
+        summary: "wake_suppressed_on_hold",
+        metadata: {
+          reason: operable.code,
+          holdId: operable.holdId,
+          trigger: "inbound_notice",
+          channel: event.channelId,
+          ts: event.ts,
+          eventId: event.eventId,
+          jobId,
+          suppressedSinceLastRow: slot.suppressed,
+          ...phone,
+        },
+      }).catch(() => undefined);
+    }
+    return { handled: true, woke: 0, skipReason: "hold" };
+  }
+
+  const binding = await d.getBinding(employeeId);
+  const url = (binding?.wakeWebhookUrl || "").trim();
+  if (!url) {
+    await d.appendAudit({
+      orgId,
+      employeeId,
+      credentialId: null,
+      action: "inbound_notice.wake",
+      purpose: PURPOSE,
+      summary: "wake_webhook_missing",
+      metadata: {
+        reason: "wake_webhook_missing",
+        eventId: event.eventId,
+        channel: event.channelId,
+        ts: event.ts,
+        jobId,
+        ...phone,
+      },
+    }).catch(() => undefined);
+    return { handled: true, woke: 0, skipReason: "wake_webhook_missing" };
+  }
+
+  const rawPhone = parsed.fields.phone;
+  const wakeFields = {
+    receivedAt: redactPhoneInText(parsed.fields.receivedAt, rawPhone),
+    phone: last4Digits(rawPhone),
+    company: redactPhoneInText(parsed.fields.company, rawPhone),
+    personName: redactPhoneInText(parsed.fields.personName, rawPhone),
+    category: redactPhoneInText(parsed.fields.category, rawPhone),
+    callbackNeeded: redactPhoneInText(parsed.fields.callbackNeeded, rawPhone),
+    emergency: redactPhoneInText(parsed.fields.emergency, rawPhone),
+    salesCall: redactPhoneInText(parsed.fields.salesCall, rawPhone),
+    summary: redactPhoneInText(parsed.fields.summary, rawPhone),
+  };
+  const payload = {
+    surface: "slack" as const,
+    kind: "inbound_notice" as const,
+    trigger: "ai_concier",
+    priority,
+    orgId,
+    employeeId,
+    jobId,
+    eventId: event.eventId,
+    channel: event.channelId,
+    ts: event.ts,
+    thread_ts: event.threadTs,
+    acceptedAt: d.now().toISOString(),
+    sourceNotice: {
+      surface: "slack" as const,
+      channel: event.channelId,
+      ts: event.ts,
+      fullPhone: "read_original_slack_notice" as const,
+      noteJa: SOURCE_NOTICE_NOTE_JA,
+    },
+    inboundNotice: {
+      schema: INBOUND_NOTICE_SCHEMA,
+      source: parsed.source,
+      adapterId: parsed.adapterId,
+      untrustedOutsideText: fenceUntrustedFields(wakeFields),
+    },
+  };
+
+  const wakeBody = await withMcpHandoff(payload, {
+    orgId,
+    employeeId,
+    surface: "slack",
+    kind: "conversation",
+    trigger: "inbound_notice",
+  });
+  const secret = await d.getWakeWebhookSecret(employeeId);
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (secret) headers.authorization = `Bearer ${secret}`;
+
+  try {
+    const response = await d.fetch(
+      url,
+      withLinkLocalGuard({
+        method: "POST",
+        headers,
+        body: JSON.stringify(wakeBody),
+        signal: AbortSignal.timeout(WAKE_TIMEOUT_MS),
+      })
+    );
+    if (!response.ok) {
+      console.error("inbound_notice_wake_http", { employeeId, status: response.status, eventId: event.eventId });
+      await d.appendAudit({
+        orgId,
+        employeeId,
+        credentialId: null,
+        action: "inbound_notice.wake",
+        purpose: PURPOSE,
+        summary: "起こす webhook の送信に失敗",
+        metadata: {
+          reason: "wake_failed",
+          eventId: event.eventId,
+          channel: event.channelId,
+          ts: event.ts,
+          jobId,
+          ...phone,
+          ...mcpHandoffWakeAuditMeta(wakeBody, "slack"),
+        },
+      }).catch(() => undefined);
+      return { handled: true, woke: 0, skipReason: "wake_failed" };
+    }
+  } catch {
+    console.error("inbound_notice_wake_failed", { employeeId, eventId: event.eventId });
+    await d.appendAudit({
+      orgId,
+      employeeId,
+      credentialId: null,
+      action: "inbound_notice.wake",
+      purpose: PURPOSE,
+      summary: "起こす webhook の送信に失敗",
+      metadata: { reason: "wake_failed", eventId: event.eventId, channel: event.channelId, jobId, ...phone },
+    }).catch(() => undefined);
+    return { handled: true, woke: 0, skipReason: "wake_failed" };
+  }
+
+  if (event.ts) {
+    await d.recordThreadWake({
+      orgId,
+      employeeId,
+      keyInput: {
+        orgId,
+        surface: "slack",
+        slackChannelId: event.channelId,
+        threadId: event.threadTs || event.ts,
+      },
+      ts: event.ts,
+    }).catch(() => false);
+  }
+
+  await d.appendAudit({
+    orgId,
+    employeeId,
+    credentialId: null,
+    action: "inbound_notice.wake",
+    purpose: PURPOSE,
+    summary: "受電通知で AI 社員を起こした",
+    metadata: {
+      reason: "woke",
+      eventId: event.eventId,
+      channel: event.channelId,
+      ts: event.ts,
+      jobId,
+      source: parsed.source,
+      adapterId: parsed.adapterId,
+      priority,
+      isEmergency,
+      ...phone,
+      ...mcpHandoffWakeAuditMeta(wakeBody, "slack"),
+    },
+  }).catch(() => undefined);
+
+  return { handled: true, woke: 1 };
+}
