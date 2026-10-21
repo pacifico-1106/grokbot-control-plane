@@ -61,6 +61,11 @@ afterEach(async () => {
   const { resetDemoVoterBindings } = await import("@/lib/approval-workflow/voter-binding");
   resetDemoVoterBindings();
   await revokeEmployeeGoogleIdentity({ employeeId: EMP, orgId: DEMO_ORG.id }).catch(() => undefined);
+  const { setAuthLinkAfterProviderSendForTests, setAuthLinkConsumeResultForTests } = await import(
+    "@/lib/approvals/auth-link-send-claim"
+  );
+  setAuthLinkAfterProviderSendForTests(null);
+  setAuthLinkConsumeResultForTests(null);
 });
 
 async function withNeedsApprovalMailPolicy<T>(fn: () => Promise<T>): Promise<T> {
@@ -408,6 +413,189 @@ describe("L1: approvalId replay uses fulfillMailSend / MAIL_SEND_GMAIL_LIVE", ()
     expect(sent.body.result?.delivery).toBe("stub");
     const approval = await getApprovalById(approvalId, DEMO_ORG.id);
     expect(fulfillmentOf(approval).consumed).toBe(true);
+  });
+});
+
+describe("review follow-up M1: stale sending is uncertain, not reclaimed", () => {
+  beforeEach(() => {
+    process.env.SECRET_AUTH_ACTION_LINK_ENABLED = "true";
+    delete process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+  });
+
+  test("TTL-expired sending becomes uncertain and does not resend", async () => {
+    await bindMailbox();
+    process.env.MAIL_SEND_GMAIL_LIVE = "true";
+    const gmail = mockGmail();
+    const { approvalId, args, jobId } = await createApprovedAuthLink("rev_m1_ttl");
+    const { updateApprovalMetadata } = await import("@/lib/data/approvals");
+    const current = await getApprovalById(approvalId, DEMO_ORG.id);
+    const sentAt = new Date(Date.now() - 11 * 60 * 1000).toISOString();
+    await updateApprovalMetadata(current!, {
+      authLinkFulfillment: {
+        status: "sending",
+        sentAt,
+        sendingAt: sentAt,
+        ttlSeconds: 600,
+        sendingByJobId: "job_stale",
+        consumed: false,
+      },
+    });
+    const replay = await withNeedsApprovalMailPolicy(() =>
+      invokeMail({ jobSuffix: "rev_m1_ttl_replay", approvalId, jobId, speakerId: SPEAKER, args })
+    );
+    expect(replay.body.ok).toBe(false);
+    expect(replay.body.code).toBe("auth_link_send_uncertain");
+    expect(String(replay.body.message)).toContain("運用確認が必要");
+    expect(gmail.posts).toBe(0);
+    const after = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(fulfillmentOf(after).status).toBe("uncertain");
+    expect(fulfillmentOf(after).consumed).not.toBe(true);
+  });
+});
+
+describe("review follow-up M2: post-send exception / consume failure → uncertain", () => {
+  beforeEach(() => {
+    process.env.SECRET_AUTH_ACTION_LINK_ENABLED = "true";
+    delete process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+  });
+
+  afterEach(async () => {
+    const { setAuthLinkAfterProviderSendForTests, setAuthLinkConsumeResultForTests } = await import(
+      "@/lib/approvals/auth-link-send-claim"
+    );
+    setAuthLinkAfterProviderSendForTests(null);
+    setAuthLinkConsumeResultForTests(null);
+  });
+
+  test("exception after provider success marks uncertain and does not release", async () => {
+    const { setAuthLinkAfterProviderSendForTests } = await import("@/lib/approvals/auth-link-send-claim");
+    setAuthLinkAfterProviderSendForTests(() => {
+      throw new Error("post_send_boom");
+    });
+    await bindMailbox();
+    process.env.MAIL_SEND_GMAIL_LIVE = "true";
+    const gmail = mockGmail();
+    const { approvalId, args, jobId } = await createApprovedAuthLink("rev_m2_exc");
+    const result = await withNeedsApprovalMailPolicy(() =>
+      invokeMail({ jobSuffix: "rev_m2_exc_send", approvalId, jobId, speakerId: SPEAKER, args })
+    );
+    expect(result.body.ok).toBe(false);
+    expect(result.body.code).toBe("auth_link_send_uncertain");
+    expect(String(result.body.message)).toContain("運用確認が必要");
+    expect(gmail.posts).toBe(1);
+    const after = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(fulfillmentOf(after).status).toBe("uncertain");
+    expect(fulfillmentOf(after).consumed).not.toBe(true);
+    const retry = await withNeedsApprovalMailPolicy(() =>
+      invokeMail({ jobSuffix: "rev_m2_exc_retry", approvalId, jobId, speakerId: SPEAKER, args })
+    );
+    expect(retry.body.code).toBe("auth_link_send_uncertain");
+    expect(gmail.posts).toBe(1);
+  });
+
+  test("consume failure after send marks uncertain and checks that result", async () => {
+    const { setAuthLinkConsumeResultForTests } = await import("@/lib/approvals/auth-link-send-claim");
+    setAuthLinkConsumeResultForTests(false);
+    await bindMailbox();
+    process.env.MAIL_SEND_GMAIL_LIVE = "true";
+    const gmail = mockGmail();
+    const { approvalId, args, jobId } = await createApprovedAuthLink("rev_m2_consume");
+    const result = await withNeedsApprovalMailPolicy(() =>
+      invokeMail({ jobSuffix: "rev_m2_consume_send", approvalId, jobId, speakerId: SPEAKER, args })
+    );
+    expect(result.body.ok).toBe(false);
+    expect(result.body.code).toBe("auth_link_send_uncertain");
+    expect(String(result.body.message)).toContain("運用確認が必要");
+    expect(gmail.posts).toBe(1);
+    const after = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(fulfillmentOf(after).status).toBe("uncertain");
+  });
+});
+
+describe("review follow-up M3: re-invoke runs execution authority (incl. hold)", () => {
+  beforeEach(() => {
+    process.env.SECRET_AUTH_ACTION_LINK_ENABLED = "true";
+    delete process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+  });
+
+  test("re-invoke without recorded approver does not send", async () => {
+    await bindMailbox();
+    process.env.MAIL_SEND_GMAIL_LIVE = "true";
+    const gmail = mockGmail();
+    const { approvalId, args, jobId } = await createApprovedAuthLink("rev_m3_auth");
+    const { demoUpdateApproval } = await import("@/lib/data/demo-approvals-store");
+    await demoUpdateApproval(approvalId, { approverMemberId: null });
+    const result = await withNeedsApprovalMailPolicy(() =>
+      invokeMail({ jobSuffix: "rev_m3_auth_send", approvalId, jobId, speakerId: SPEAKER, args })
+    );
+    expect(result.body.ok).toBe(false);
+    expect(result.httpStatus).not.toBe(200);
+    expect(gmail.posts).toBe(0);
+    const after = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(fulfillmentOf(after).consumed).not.toBe(true);
+  });
+
+  test("held ticket re-invoke does not send", async () => {
+    await bindMailbox();
+    process.env.MAIL_SEND_GMAIL_LIVE = "true";
+    const gmail = mockGmail();
+    const { approvalId, args, jobId } = await createApprovedAuthLink("rev_m3_hold");
+    const { updateApprovalMetadata } = await import("@/lib/data/approvals");
+    const current = await getApprovalById(approvalId, DEMO_ORG.id);
+    await updateApprovalMetadata(current!, { heldByHoldId: "11111111-1111-4111-8111-111111111111" });
+    const result = await withNeedsApprovalMailPolicy(() =>
+      invokeMail({ jobSuffix: "rev_m3_hold_send", approvalId, jobId, speakerId: SPEAKER, args })
+    );
+    expect(result.body.ok).toBe(false);
+    expect(result.body.code).toBe("approval_held");
+    expect(gmail.posts).toBe(0);
+  });
+});
+
+describe("review follow-up M4: body speakerId is not trusted", () => {
+  beforeEach(() => {
+    process.env.SECRET_AUTH_ACTION_LINK_ENABLED = "true";
+    delete process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+  });
+
+  test("self-reported body speakerId without authenticated channel context is rejected", async () => {
+    await bindSpeaker();
+    const before = (await listApprovals(DEMO_ORG.id)).filter((a) => a.status === "pending").length;
+    const result = await withNeedsApprovalMailPolicy(() =>
+      invokeMail({ jobSuffix: "rev_m4_body", speakerId: SPEAKER })
+    );
+    expect(result.httpStatus).toBe(400);
+    expect(result.body.code).toBe("auth_link_requester_unresolved");
+    expect(result.body.reason).toBe("speaker_context_missing");
+    expect(result.body.approvalId).toBeFalsy();
+    const after = (await listApprovals(DEMO_ORG.id)).filter((a) => a.status === "pending").length;
+    expect(after).toBe(before);
+  });
+});
+
+describe("review follow-up L1/L3: SQL cross-org claim and comments", () => {
+  test("db-execution.sql asserts service_role cross-org claim updates 0 rows", () => {
+    const sql = readFileSync(join(process.cwd(), "tests/security/db-execution.sql"), "utf8");
+    expect(sql).toMatch(/claim_auth_link_send\(/);
+    expect(sql).toMatch(/00000000-0000-4000-8000-000000000002/);
+    expect(sql).toMatch(/authActionLink/);
+    expect(sql).toMatch(/not_found|count\(\*\)=0/);
+  });
+
+  test("migration claim stores sentAt and TTL; stale sending is uncertain not reclaimed", () => {
+    const migDir = join(process.cwd(), "supabase/migrations");
+    const mig = readdirSync(migDir).find((f) => f.endsWith("_auth_link_send_claim.sql"));
+    expect(mig).toBeTruthy();
+    const sql = readFileSync(join(migDir, mig!), "utf8");
+    expect(sql).toContain("sentAt");
+    expect(sql).toMatch(/ttlSeconds|interval '10 minutes'|interval '600/);
+    expect(sql).toMatch(/uncertain/);
+  });
+
+  test("invoke.ts no longer says requesterMemberId is omitted as fail-safe", () => {
+    const src = readFileSync(join(process.cwd(), "lib/gateway/invoke.ts"), "utf8");
+    expect(src).not.toMatch(/requesterMemberId is omitted/);
+    expect(src).not.toMatch(/self-approval cannot be detected/);
   });
 });
 

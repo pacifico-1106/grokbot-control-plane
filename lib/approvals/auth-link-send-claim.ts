@@ -169,3 +169,26 @@ export async function markAuthLinkSendUncertain(
 export function authLinkFulfillmentBlocksReplay(approval: ApprovalRequest): AuthLinkSendClaim {
   return classify(readMeta(approval));
 }
+
+/** Test-only: next consumeAuthLinkSend returns this boolean. */
+let consumeResultForTests: boolean | null = null;
+/** Test-only: called after provider send succeeds (wired in invoke). */
+let afterProviderSendForTests: (() => void) | null = null;
+
+export function setAuthLinkConsumeResultForTests(result: boolean | null): void {
+  consumeResultForTests = result;
+}
+
+export function setAuthLinkAfterProviderSendForTests(hook: (() => void) | null): void {
+  afterProviderSendForTests = hook;
+}
+
+export function takeAuthLinkConsumeResultForTests(): boolean | null {
+  const value = consumeResultForTests;
+  consumeResultForTests = null;
+  return value;
+}
+
+export function runAuthLinkAfterProviderSendForTests(): void {
+  afterProviderSendForTests?.();
+}
