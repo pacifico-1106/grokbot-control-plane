@@ -188,7 +188,9 @@ async function resolveWorkflow(
 
   // PR-D: on approver-authority tickets the pressing Slack / LINE / Telegram
   // user must be linked to the member who counts as the approver (fail closed).
-  if (status === "approved" && isApproverAuthorityEnabled() && approval.requiredApproverKind) {
+  // M2b: Enforce for tickets with requiredApproverKind even when global flag is OFF.
+  const hasRequiredKindForIdentity = Boolean(approval.requiredApproverKind);
+  if (status === "approved" && (isApproverAuthorityEnabled() || hasRequiredKindForIdentity) && approval.requiredApproverKind) {
     const identity = await verifyApproverIdentity(orgId, opts);
     if (!identity.ok) return authorityStop(approval, identity.reason, false);
     opts = { ...opts, memberId: identity.memberId };
@@ -258,7 +260,8 @@ async function resolveWorkflow(
   // an approve ballot; a designated admin on an owner ticket is recorded as an
   // endorsement instead (no ballot, ticket stays pending).
   const authorityMemberId = (opts.memberId || opts.voterUserId || "").trim();
-  const enforceAuthority = vote === "approve" && isApproverAuthorityEnabled() && Boolean(approval.requiredApproverKind);
+  // M2b: Enforce authority for tickets with requiredApproverKind even when global flag is OFF.
+  const enforceAuthority = vote === "approve" && (isApproverAuthorityEnabled() || Boolean(approval.requiredApproverKind));
   if (enforceAuthority) {
     const decision = await checkApproverAuthority({
       orgId,

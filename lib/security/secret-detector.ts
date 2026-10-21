@@ -29,10 +29,21 @@ export const SECRET_DETECTION_NEXT_STEP_JA =
 /** A non-blocking "looks like a key but has no context" hit. No value. */
 export type SecretFinding = { pattern: string; fieldPath: string; length: number };
 
+/** Detected auth action link info (secrets NOT exposed). */
+export type DetectedAuthActionLink = {
+  mode: 'resetPassword' | 'verifyEmail' | 'signIn' | 'recoverEmail';
+  /** Whether the link contains an oobCode parameter. */
+  hasOobCode: true;
+  /** Whether the link contains an apiKey parameter. */
+  hasApiKey: boolean;
+};
+
 export type SecretDetectionResult = {
   ok: true;
   /** Present only when non-empty. Never carries the value. */
   suspected?: SecretFinding[];
+  /** Auth action links detected (FLAG ON only). oobCode/apiKey values NOT included. */
+  authActionLinks?: DetectedAuthActionLink[];
 } | {
   ok: false;
   code: 'secret_detected_in_payload';
@@ -52,6 +63,8 @@ export type SecretScanContext = {
   hasAwsAccessKeyId?: boolean;
   /** Field path of the value (its key names count as AWS keyword context). */
   fieldPath?: string;
+  /** Organization ID for org-scoped feature checks (H1: fail-closed when absent). */
+  orgId?: string | null;
 };
 
 export type SecretPattern = {
@@ -292,9 +305,9 @@ function urlHostPathSpans(text: string): Array<[number, number]> {
 function detectAwsSecretKey(
   value: string,
   ctx: SecretScanContext
-): { kind: 'block' | 'suspect'; length: number } | null {
+): { kind: 'block' | 'suspect'; length: number; index?: number } | null {
   const text = decodeKeyChars(value);
-  let suspect: { kind: 'suspect'; length: number } | null = null;
+  let suspect: { kind: 'suspect'; length: number; index: number } | null = null;
   const fieldPathText = ctx.fieldPath ?? '';
   const pathHasKeyword = AWS_SECRET_KEYWORD.test(fieldPathText) || AWS_SECRET_CONTEXT_WEAK.test(fieldPathText);
   const idInPayload = ctx.hasAwsAccessKeyId === true || AWS_ACCESS_KEY_ID.test(text);
@@ -307,13 +320,13 @@ function detectAwsSecretKey(
     const before = text.slice(Math.max(0, start - AWS_KEYWORD_WINDOW_BEFORE), start);
     const after = text.slice(end, end + AWS_KEYWORD_WINDOW_AFTER);
     if (idInPayload || pathHasKeyword || AWS_SECRET_KEYWORD.test(before) || AWS_SECRET_KEYWORD.test(after)) {
-      return { kind: 'block', length: candidate.length };
+      return { kind: 'block', length: candidate.length, index: start };
     }
     if (AWS_SECRET_CONTEXT_WEAK.test(before) || AWS_SECRET_CONTEXT_WEAK.test(after)) {
       urlSpans ??= urlHostPathSpans(text);
-      if (!urlSpans.some(([a, b]) => a <= start && end <= b)) return { kind: 'block', length: candidate.length };
+      if (!urlSpans.some(([a, b]) => a <= start && end <= b)) return { kind: 'block', length: candidate.length, index: start };
     }
-    suspect = { kind: 'suspect', length: candidate.length };
+    suspect = { kind: 'suspect', length: candidate.length, index: start };
   }
   return suspect;
 }
@@ -471,12 +484,13 @@ export function detectSecretInString(value: string, ctx: SecretScanContext = {})
     };
   }
   if (isAllowlisted(value)) return { ok: true };
-  const raw = scanString(value, ctx, fieldPath, true);
+  const ctxWithPath = { ...ctx, fieldPath };
+  const raw = scanString(value, ctxWithPath, fieldPath, true);
   if (!raw.ok) return raw;
   let suspected = raw.suspected ?? [];
   const normalized = normalizeForScan(value);
   if (normalized !== value) {
-    const decoded = scanString(normalized, ctx, fieldPath, false);
+    const decoded = scanString(normalized, ctxWithPath, fieldPath, false);
     if (!decoded.ok) return decoded;
     if (suspected.length === 0 && decoded.suspected) suspected = decoded.suspected;
   }
@@ -488,18 +502,77 @@ function scanString(value: string, ctx: SecretScanContext, fieldPath: string, fu
   const bareUrl = isBareUrl(value);
   let genericText: string | null = null;
   const suspected: SecretFinding[] = [];
+  
+  let authLinks: FirebaseAuthActionLink[] | null = null;
 
   for (const { name, pattern, minLength } of SECRET_PATTERNS) {
     if (name === 'aws_secret_key') {
       const aws = detectAwsSecretKey(value, ctx);
       if (aws?.kind === 'block') return blockedResult(name, fieldPath, aws.length);
-      if (aws?.kind === 'suspect') suspected.push({ pattern: name, fieldPath, length: aws.length });
+      if (aws?.kind === 'suspect') {
+        authLinks ??= parseFirebaseAuthActionLinks(value, ctx.orgId);
+        const matchStart = aws.index ?? 0;
+        const matchEnd = matchStart + aws.length;
+        const isExactApiKeySpan = authLinks.some(
+          (link) =>
+            link.apiKeyValue !== null &&
+            link.apiKeyValue === value.slice(matchStart, matchEnd) &&
+            matchStart >= link.start &&
+            matchEnd <= link.end
+        );
+        if (!isExactApiKeySpan) {
+          suspected.push({ pattern: name, fieldPath, length: aws.length });
+        }
+      }
       continue;
     }
     if (name === 'jwt_token') {
       const jwtLength = detectJwt(value);
       if (jwtLength !== null) return blockedResult(name, fieldPath, jwtLength);
       continue;
+    }
+    if (name === 'google_api_key' && isSecretAuthActionLinkEnabledForOrg(ctx.orgId)) {
+      authLinks ??= parseFirebaseAuthActionLinks(value, ctx.orgId);
+      const globalPattern = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
+      for (const match of value.matchAll(globalPattern)) {
+        const matched = match[0];
+        const matchStart = match.index ?? 0;
+        const insideAuthLink = authLinks.some(
+          (link) =>
+            link.apiKeyValue !== null &&
+            link.apiKeyValue.startsWith(matched) &&
+            matchStart >= link.start &&
+            matchStart < link.end
+        );
+        if (!insideAuthLink) {
+          return blockedResult(name, fieldPath, matched.length);
+        }
+      }
+      continue;
+    }
+    if (name === 'api_key_inline' && isSecretAuthActionLinkEnabledForOrg(ctx.orgId)) {
+      authLinks ??= parseFirebaseAuthActionLinks(value, ctx.orgId);
+      const globalPattern = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
+      for (const match of value.matchAll(globalPattern)) {
+        const matchStart = match.index ?? 0;
+        const matchEnd = matchStart + match[0].length;
+        // L1: Only ignore api_key_inline if the VALUE part exactly matches the link's apiKeyValue.
+        // Don't ignore api_key_inline in continueUrl or elsewhere - only the actual Firebase apiKey param.
+        const keyValueMatch = match[0].match(/['":\s=]+([A-Za-z0-9_\-]+)$/i);
+        const keyValuePart = keyValueMatch ? keyValueMatch[1] : null;
+        const isExactApiKeyValue = authLinks.some(
+          (link) =>
+            link.apiKeyValue !== null &&
+            keyValuePart !== null &&
+            link.apiKeyValue === keyValuePart &&
+            matchStart >= link.start &&
+            matchEnd <= link.end
+        );
+        if (!isExactApiKeyValue) {
+          return blockedResult(name, fieldPath, match[0].length);
+        }
+      }
+      if (authLinks.length > 0) continue;
     }
     const isGeneric = name === 'base64_long_secret' || name === 'hex_long_secret';
     if (isGeneric && (bareUrl || !full)) continue;
@@ -601,18 +674,36 @@ export function checkPayloadScanLimits(
   };
 }
 
-export function detectSecretInPayload(payload: unknown): SecretDetectionResult {
+export function detectSecretInPayload(payload: unknown, ctx?: SecretScanContext): SecretDetectionResult {
   const tooLarge = checkPayloadScanLimits(payload);
   if (tooLarge) return tooLarge;
   const strings = extractAllStrings(payload);
   const idInPayload = strings.some(({ value }) => hasAwsAccessKeyId(value));
   const suspected: SecretFinding[] = [];
+  const authActionLinks: DetectedAuthActionLink[] = [];
+  const orgId = ctx?.orgId;
+  
   for (const { path, value } of strings) {
-    const result = detectSecretInString(value, { hasAwsAccessKeyId: idInPayload, fieldPath: path });
+    const result = detectSecretInString(value, { hasAwsAccessKeyId: idInPayload, fieldPath: path, orgId });
     if (!result.ok) return result;
     if (result.suspected) suspected.push(...result.suspected);
+    
+    if (isSecretAuthActionLinkEnabledForOrg(orgId)) {
+      const links = parseFirebaseAuthActionLinks(value, orgId);
+      for (const link of links) {
+        authActionLinks.push({
+          mode: link.mode,
+          hasOobCode: true,
+          hasApiKey: link.hasApiKey,
+        });
+      }
+    }
   }
-  return suspected.length > 0 ? { ok: true, suspected } : { ok: true };
+  
+  const result: SecretDetectionResult = { ok: true };
+  if (suspected.length > 0) result.suspected = suspected;
+  if (authActionLinks.length > 0) result.authActionLinks = authActionLinks;
+  return result;
 }
 
 export type AuditSafePayload = {
@@ -732,3 +823,158 @@ export const SECRET_DETECTOR_REGEXES_FOR_TEST: ReadonlyArray<{ name: string; pat
   { name: 'allowlist_short_upper', pattern: ALLOWLIST_PATTERNS[2] },
   { name: 'bare_url', pattern: BARE_URL },
 ];
+
+// ---------------------------------------------------------------------------
+// Firebase Auth Action Link Detection (SECRET_AUTH_ACTION_LINK_ENABLED)
+// Handles password reset, email verify, sign-in, and email recovery links.
+// These links contain oobCode (one-time code) and apiKey (Google API key)
+// that should be treated differently from standalone API keys.
+// ---------------------------------------------------------------------------
+
+import { isSecretAuthActionLinkEnabled, isSecretAuthActionLinkEnabledForOrg } from "@/lib/feature-flags";
+
+/** Valid Firebase auth action modes. */
+const FIREBASE_AUTH_MODES = ["resetPassword", "verifyEmail", "signIn", "recoverEmail"] as const;
+type FirebaseAuthMode = typeof FIREBASE_AUTH_MODES[number];
+
+function isFirebaseAuthMode(mode: string): mode is FirebaseAuthMode {
+  return FIREBASE_AUTH_MODES.includes(mode as FirebaseAuthMode);
+}
+
+/** Parsed Firebase auth action link (secrets are NOT exposed). */
+export type FirebaseAuthActionLink = {
+  mode: FirebaseAuthMode;
+  hasOobCode: boolean;
+  hasApiKey: boolean;
+  /** The actual apiKey value — used ONLY for the exception check; never logged. */
+  apiKeyValue: string | null;
+  /** Start and end positions in the source text (for exclusion matching). */
+  start: number;
+  end: number;
+};
+
+/**
+ * URL pattern for Firebase auth action links.
+ * Matches:
+ * - *.firebaseapp.com/__/auth/action
+ * - Custom domains with /__/auth/action path
+ * Path must be exactly /__/auth/action (Firebase standard).
+ */
+const FIREBASE_AUTH_URL_PATTERN = /https?:\/\/[A-Za-z0-9.-]+\/__\/auth\/action\?[^\s"'<>]*/gi;
+
+/**
+ * Parse Firebase auth action links from text.
+ * URLs are fully parsed (not regex-only) to ensure correct parameter extraction.
+ * 
+ * SECURITY: apiKeyValue is extracted for the exception check but MUST NOT be
+ * logged, returned in errors, or included in audit records.
+ * 
+ * H1: When orgId is provided, uses org-scoped flag check. When orgId is null/undefined,
+ * returns empty (fail-closed) to prevent exemption bypass.
+ */
+export function parseFirebaseAuthActionLinks(text: string, orgId?: string | null): FirebaseAuthActionLink[] {
+  if (!isSecretAuthActionLinkEnabledForOrg(orgId)) return [];
+  
+  const results: FirebaseAuthActionLink[] = [];
+  
+  for (const match of text.matchAll(FIREBASE_AUTH_URL_PATTERN)) {
+    const urlString = match[0];
+    const start = match.index ?? 0;
+    const end = start + urlString.length;
+    
+    try {
+      const url = new URL(urlString);
+      
+      const mode = url.searchParams.get("mode");
+      const oobCode = url.searchParams.get("oobCode");
+      const apiKey = url.searchParams.get("apiKey");
+      
+      if (!mode || !isFirebaseAuthMode(mode)) continue;
+      if (!oobCode) continue;
+      
+      results.push({
+        mode,
+        hasOobCode: true,
+        hasApiKey: Boolean(apiKey),
+        apiKeyValue: apiKey,
+        start,
+        end,
+      });
+    } catch {
+      continue;
+    }
+  }
+  
+  return results;
+}
+
+/** Auth action link detection result (secrets NOT exposed). */
+export type AuthActionLinkDetectionResult = {
+  detected: false;
+} | {
+  detected: true;
+  mode: FirebaseAuthMode;
+  /** Number of auth action links found. */
+  count: number;
+};
+
+/**
+ * Detect if a value contains Firebase auth action links.
+ * 
+ * SECURITY: Result never contains oobCode or apiKey values.
+ */
+export function detectAuthActionLink(value: string, orgId?: string | null): AuthActionLinkDetectionResult {
+  const links = parseFirebaseAuthActionLinks(value, orgId);
+  if (links.length === 0) return { detected: false };
+  return {
+    detected: true,
+    mode: links[0].mode,
+    count: links.length,
+  };
+}
+
+/**
+ * Check if a google_api_key match is protected by being inside a valid
+ * Firebase auth action link.
+ * 
+ * Returns true (= skip this match) when ALL of:
+ * 1. The AIza key appears as the `apiKey` query parameter of a valid auth link
+ * 2. The link has mode = resetPassword | verifyEmail | signIn | recoverEmail
+ * 3. The link has an oobCode parameter
+ * 4. The AIza key does NOT appear anywhere else in the text
+ * 
+ * Uses URL parsing (not regex) for the final check.
+ * 
+ * NOTE: The google_api_key pattern matches 39 chars (AIza + 35), but actual
+ * Firebase API keys may be longer. We check if the matched key starts the
+ * apiKey parameter value (which covers all cases).
+ */
+export function isGoogleApiKeyProtectedByAuthLink(
+  value: string,
+  matchedKey: string,
+  authLinks: FirebaseAuthActionLink[]
+): boolean {
+  if (authLinks.length === 0) return false;
+  
+  const linksWithThisKey = authLinks.filter(
+    (link) => link.apiKeyValue !== null && link.apiKeyValue.startsWith(matchedKey)
+  );
+  
+  if (linksWithThisKey.length === 0) return false;
+  
+  const keyMatches = [...value.matchAll(new RegExp(escapeRegExp(matchedKey), "g"))];
+  
+  for (const keyMatch of keyMatches) {
+    const keyStart = keyMatch.index ?? 0;
+    const insideAnyLink = linksWithThisKey.some(
+      (link) => keyStart >= link.start && keyStart < link.end
+    );
+    if (!insideAnyLink) return false;
+  }
+  
+  return true;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

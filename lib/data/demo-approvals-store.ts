@@ -30,6 +30,13 @@ const REDIS_KEY = "staffpass:demo:approvals:v1";
 
 export type DemoApprovalsBackend = "upstash" | "github" | "http" | "memory";
 
+// Test injection point: when set, demoCreateApproval will throw this error
+let testCreateApprovalError: Error | null = null;
+
+export function setDemoCreateApprovalErrorForTests(error: Error | null): void {
+  testCreateApprovalError = error;
+}
+
 function redisUrl(): string {
   return (
     process.env.UPSTASH_REDIS_REST_URL?.trim() ||
@@ -393,6 +400,10 @@ export async function demoUpdateApproval(
 export async function demoCreateApproval(
   input: CreateRuntimeApprovalInput
 ): Promise<ApprovalRequest> {
+  // Test injection point
+  if (testCreateApprovalError) {
+    throw testCreateApprovalError;
+  }
   if (!isDurableDemoApprovalsStore()) {
     return pushRuntimeApproval(input);
   }

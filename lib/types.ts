@@ -598,6 +598,7 @@ export type AuditAction =
   | "gateway.conversation_org_mismatch"
   | "gateway.conversation_channel_mismatch"
   | "gateway.session_org_mismatch"
+  | "gateway.auth_action_link_blocked"
   | "billing.updated"
   | "email.sent"
   | "gateway.link_changed"

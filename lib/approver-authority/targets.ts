@@ -165,7 +165,8 @@ export type ApproverRequirementReason =
   | "money_spend_limit"
   | "money_cost_cap"
   | "money_cost_cap_unverified"
-  | "money_limits_unverified";
+  | "money_limits_unverified"
+  | "auth_action_link";
 
 export interface ApproverRequirement {
   kind: RequiredApproverKind;
