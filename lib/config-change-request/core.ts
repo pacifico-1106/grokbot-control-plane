@@ -7,7 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import { BUSINESS_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
-import type { ChannelClassification, ConversationSurface, OrgChannel } from "@/lib/types";
+import type { Audience, ChannelClassification, ConversationSurface, OrgChannel, OrgPartyKind } from "@/lib/types";
 
 export const CONFIG_CHANGE_TOOL = "config.change_request";
 export const CONFIG_CHANGE_PURPOSE = "config.change_request";
@@ -21,7 +21,7 @@ const REASON_MAX_CHARS = 500;
 const DIFF_SUMMARY_MAX_CHARS = 240;
 const DIFF_LINES_MAX = 200;
 
-export const CONFIG_CHANGE_KINDS = ["instructions", "channel_classification", "channel_remove"] as const;
+export const CONFIG_CHANGE_KINDS = ["instructions", "channel_classification", "channel_remove", "party_audience"] as const;
 export type ConfigChangeKind = (typeof CONFIG_CHANGE_KINDS)[number];
 
 /**
@@ -95,10 +95,20 @@ export type ChannelRemoveProposal = {
   externalId: string;
 };
 
+export type PartyAudienceProposal = {
+  kind: "party_audience";
+  partyKind: OrgPartyKind;
+  identifier: string;
+  audience: Exclude<Audience, "unknown">;
+  /** Original surface from channel_classification before redirect. */
+  originalSurface: ConversationSurface;
+};
+
 export type ConfigChangeProposal =
   | InstructionsProposal
   | ChannelClassificationProposal
-  | ChannelRemoveProposal;
+  | ChannelRemoveProposal
+  | PartyAudienceProposal;
 
 export type ParsedConfigChangeInput = {
   jobId: string;
@@ -230,7 +240,7 @@ export function parseConfigChangeInput(
     }
     if (kind === "channel_remove") {
       proposal = { kind, surface, externalId };
-    } else {
+    } else if (kind === "channel_classification") {
       const classification = str(channel.classification, 32) as ChannelClassification;
       if (!CLASSIFICATIONS.includes(classification)) {
         return {
@@ -246,6 +256,12 @@ export function parseConfigChangeInput(
         classification,
         mixed: channel.mixed === true || classification === "shared_external",
         slackTeamId: str(channel.slackTeamId, 32) || null,
+      };
+    } else {
+      return {
+        ok: false,
+        code: "unsupported_kind",
+        messageJa: `この種類の変更依頼には対応していません（対応: instructions | channel_classification | channel_remove）。管理画面から人が変更してください。`,
       };
     }
   }
@@ -322,7 +338,27 @@ export type ConfigChangeBefore =
       classification: ChannelClassification | null;
       mixed: boolean;
       channelId: string | null;
+    }
+  | {
+      kind: "party";
+      exists: boolean;
+      audience: Exclude<Audience, "unknown"> | null;
+      partyId: string | null;
     };
+
+const AUDIENCE_JA: Record<Exclude<Audience, "unknown">, string> = {
+  internal: "社内",
+  external: "社外",
+};
+
+const PARTY_KIND_JA: Partial<Record<OrgPartyKind, string>> = {
+  mail_address: "メールアドレス",
+  phone: "電話番号",
+  line: "LINE ID",
+  slack_user: "Slack ユーザー",
+  slack_channel: "Slack チャネル",
+  email_domain: "メールドメイン",
+};
 
 export function buildDiff(
   proposal: ConfigChangeProposal,
@@ -341,6 +377,16 @@ export function buildDiff(
         : `Instructions を置き換え（+${added}行 / -${removed}行）`;
     const sample = firstAdded ? `「${clip(firstAdded, 120)}」` : "";
     return { summaryJa: clip(`${head}${sample ? ` ${sample}` : ""}`, DIFF_SUMMARY_MAX_CHARS), lines };
+  }
+  if (proposal.kind === "party_audience") {
+    const kindJa = PARTY_KIND_JA[proposal.partyKind] ?? proposal.partyKind;
+    const label = `${kindJa} ${proposal.identifier}`;
+    const state = before.kind === "party" && before.exists && before.audience ? AUDIENCE_JA[before.audience] : "未登録";
+    const after = AUDIENCE_JA[proposal.audience];
+    return {
+      summaryJa: clip(`相手先（${kindJa}）${proposal.identifier} の分類を ${state} → ${after} に変更`, DIFF_SUMMARY_MAX_CHARS),
+      lines: [`- ${label}: ${state}`, `+ ${label}: ${after}`],
+    };
   }
   const state =
     before.kind === "channel" && before.exists && before.classification
@@ -453,6 +499,8 @@ export type ConfigChangeApplied = {
   resultText?: string;
   resultHash?: string;
   channelId?: string | null;
+  /** party_audience only: the upserted party row id. */
+  partyId?: string | null;
 };
 
 export function parseConfigChangeApplied(

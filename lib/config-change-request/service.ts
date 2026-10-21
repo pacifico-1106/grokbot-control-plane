@@ -10,7 +10,7 @@
  * - Applies exactly the stored proposal; Instructions use a base-hash check so
  *   an approver never approves a diff that no longer matches reality.
  */
-import { isConfigChangeRequestEnabled, isInboxRoutingEnabled } from "@/lib/feature-flags";
+import { isConfigChangeRequestEnabled, isInboxRoutingEnabled, isConfigChannelClassificationSurfaceGuardEnabledForOrg } from "@/lib/feature-flags";
 import { appendAuditEvent } from "@/lib/data/audit";
 import {
   createApproval,
@@ -19,7 +19,7 @@ import {
   updateApprovalMetadata,
 } from "@/lib/data/approvals";
 import { getEmployee } from "@/lib/data/employees";
-import { deleteOrgChannel, getOrgChannel } from "@/lib/data/directory";
+import { deleteOrgChannel, getOrgChannel, getOrgParty, upsertOrgParty } from "@/lib/data/directory";
 import {
   CONFIG_CHANGE_CHANNEL_REMOVE,
   DIRECTORY_REMOVE_AUDIENCE_CHECK_FAILED,
@@ -57,7 +57,9 @@ import {
   type ConfigChangeBefore,
   type ConfigChangeMetadata,
   type ParsedConfigChangeInput,
+  type PartyAudienceProposal,
 } from "./core";
+import type { Audience, OrgPartyKind } from "@/lib/types";
 
 export type ApproverResolution =
   | { ok: true; surface: "slack_dm" | "slack" | "telegram" | "line"; channelId: string | null }
@@ -151,6 +153,15 @@ async function snapshotBefore(
     const text = current?.text ?? "";
     return { kind: "instructions", text, hash: hashText(text), sourceApprovalId: current?.approvalId ?? null };
   }
+  if (proposal.kind === "party_audience") {
+    const party = await getOrgParty(orgId, proposal.partyKind, proposal.identifier);
+    return {
+      kind: "party",
+      exists: Boolean(party),
+      audience: party?.audience ?? null,
+      partyId: party?.id ?? null,
+    };
+  }
   const channel = await getOrgChannel(orgId, proposal.surface, proposal.externalId);
   return {
     kind: "channel",
@@ -217,6 +228,42 @@ async function auditRefusal(
   }).catch(() => null);
 }
 
+const SURFACE_NOT_SUPPORTED_MESSAGE_JA =
+  "この surface のチャネル分類は、resolveAudience で参照されないため効果がありません。" +
+  "メールアドレスの場合は parties.upsert（kind=mail_address）、" +
+  "ドメイン全体の場合は internalAudienceRule.patch を使ってください。";
+
+type SurfaceGuardResult =
+  | { ok: true; proposal: PartyAudienceProposal }
+  | { ok: false; code: "surface_not_supported"; messageJa: string };
+
+function classificationToAudience(
+  classification: "internal" | "shared_external" | "unknown"
+): Exclude<Audience, "unknown"> {
+  return classification === "internal" ? "internal" : "external";
+}
+
+function applySurfaceGuard(
+  proposal: { surface: string; externalId: string; classification: "internal" | "shared_external" | "unknown" },
+  employeeId: string
+): SurfaceGuardResult {
+  if (proposal.surface === "mail") {
+    const partyProposal: PartyAudienceProposal = {
+      kind: "party_audience",
+      partyKind: "mail_address",
+      identifier: proposal.externalId,
+      audience: classificationToAudience(proposal.classification),
+      originalSurface: "mail",
+    };
+    return { ok: true, proposal: partyProposal };
+  }
+  return {
+    ok: false,
+    code: "surface_not_supported",
+    messageJa: SURFACE_NOT_SUPPORTED_MESSAGE_JA,
+  };
+}
+
 /**
  * Employee-badge entry point. Never mutates config; at most it creates a
  * pending approval and notifies the approver inbox.
@@ -275,7 +322,7 @@ export async function createConfigChangeRequest(
     }
     return { ok: false, code: parsed.code, applied: false, messageJa: parsed.messageJa };
   }
-  const value = parsed.value;
+  let value = parsed.value;
 
   const secret = detectSecretInPayload({
     reason: value.reason,
@@ -297,6 +344,23 @@ export async function createConfigChangeRequest(
     return { ...rejection, ok: false, applied: false, messageJa: rejection.messageJa };
   }
   if (secret.suspected) await auditSecretDetectionSuspected(secretScope, secret.suspected);
+
+  // Surface guard: redirect or reject non-Slack channel_classification when flag is ON.
+  if (
+    value.proposal.kind === "channel_classification" &&
+    value.proposal.surface !== "slack" &&
+    isConfigChannelClassificationSurfaceGuardEnabledForOrg(input.orgId)
+  ) {
+    const surfaceGuardResult = applySurfaceGuard(value.proposal, input.employeeId);
+    if (!surfaceGuardResult.ok) {
+      await auditRefusal(employee, input.credentialId, surfaceGuardResult.code, {
+        surface: value.proposal.surface,
+        externalId: value.proposal.externalId,
+      });
+      return { ...surfaceGuardResult, applied: false };
+    }
+    value = { ...value, proposal: surfaceGuardResult.proposal };
+  }
 
   const before = await snapshotBefore(input.orgId, employee.id, value);
   const proposal = value.proposal;
@@ -362,6 +426,11 @@ export async function createConfigChangeRequest(
   if (proposal.kind === "instructions" && before.kind === "instructions") {
     if (applyInstructionsProposal(before.text, proposal) === before.text) {
       return { ok: true, code: "no_change", applied: false, messageJa: "現在の Instructions と同じ内容です（変更なし）" };
+    }
+  }
+  if (proposal.kind === "party_audience" && before.kind === "party") {
+    if (before.exists && before.audience === proposal.audience) {
+      return { ok: true, code: "no_change", applied: false, messageJa: "すでに同じ分類です（変更なし）" };
     }
   }
 
@@ -535,6 +604,14 @@ async function applyConfigChange(approval: ApprovalRequest): Promise<ConfigChang
       } else {
         applied = { ok: true, kind: proposal.kind, appliedAt: at, channelId: channel.id };
       }
+    } else if (proposal.kind === "party_audience") {
+      const party = await upsertOrgParty({
+        orgId: approval.orgId,
+        kind: proposal.partyKind,
+        identifier: proposal.identifier,
+        audience: proposal.audience,
+      });
+      applied = { ok: true, kind: proposal.kind, appliedAt: at, partyId: party.id };
     } else {
       const channel = await getOrgChannel(approval.orgId, proposal.surface, proposal.externalId);
       if (channel) {
