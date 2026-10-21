@@ -49,7 +49,7 @@ import { getCurrentEmployeeCredential } from "@/lib/mcp-oauth/employee-state";
 import { DEMO_ORG } from "@/lib/demo-data";
 import type { WhoamiCredentialInfo, WhoamiCredentialKind } from "@/lib/mcp/whoami";
 import {
-  CONFIG_CHANGE_KINDS,
+  PUBLIC_CONFIG_CHANGE_KINDS,
   CONFIG_CHANGE_MCP_TOOL,
   CONFIG_CHANGE_WHOAMI_RULE_JA,
   INSTRUCTIONS_MAX_CHARS,
@@ -379,7 +379,7 @@ export const CONFIG_CHANGE_REQUEST_MCP_TOOL_DEF: McpToolDef = {
     properties: {
       kind: {
         type: "string",
-        enum: [...CONFIG_CHANGE_KINDS],
+        enum: [...PUBLIC_CONFIG_CHANGE_KINDS],
         description: "instructions | channel_classification | channel_remove",
       },
       jobId: { type: "string", description: "Correlation id for this request (required)." },

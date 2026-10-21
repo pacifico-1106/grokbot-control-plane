@@ -11,6 +11,7 @@
  *   an approver never approves a diff that no longer matches reality.
  */
 import { isConfigChangeRequestEnabled, isInboxRoutingEnabled, isConfigChannelClassificationSurfaceGuardEnabledForOrg } from "@/lib/feature-flags";
+import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { appendAuditEvent } from "@/lib/data/audit";
 import {
   createApproval,
@@ -60,6 +61,7 @@ import {
   type PartyAudienceProposal,
 } from "./core";
 import type { Audience, OrgPartyKind } from "@/lib/types";
+import { validatePartiesUpsertArgs } from "@/lib/channel-classify/core";
 
 export type ApproverResolution =
   | { ok: true; surface: "slack_dm" | "slack" | "telegram" | "line"; channelId: string | null }
@@ -235,7 +237,7 @@ const SURFACE_NOT_SUPPORTED_MESSAGE_JA =
 
 type SurfaceGuardResult =
   | { ok: true; proposal: PartyAudienceProposal }
-  | { ok: false; code: "surface_not_supported"; messageJa: string };
+  | { ok: false; code: "surface_not_supported" | "invalid_identifier"; messageJa: string };
 
 function classificationToAudience(
   classification: "internal" | "shared_external" | "unknown"
@@ -243,15 +245,47 @@ function classificationToAudience(
   return classification === "internal" ? "internal" : "external";
 }
 
+// M2: simple email format check (@ present, not at start/end, no consecutive dots)
+const BASIC_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 function applySurfaceGuard(
   proposal: { surface: string; externalId: string; classification: "internal" | "shared_external" | "unknown" },
   employeeId: string
 ): SurfaceGuardResult {
   if (proposal.surface === "mail") {
+    // M2: strip mail: prefix if present
+    let identifier = proposal.externalId;
+    if (identifier.startsWith("mail:")) {
+      identifier = identifier.slice(5);
+    }
+
+    // M2: validate email format first (stricter than parties.upsert for mail_address redirect)
+    if (!BASIC_EMAIL_RE.test(identifier)) {
+      return {
+        ok: false,
+        code: "invalid_identifier",
+        messageJa: "メールアドレスの形式が不正です（@ が必要です）。何も登録していません。",
+      };
+    }
+
+    // M2: apply same validation as parties.upsert
+    const validation = validatePartiesUpsertArgs({
+      kind: "mail_address",
+      identifier,
+      audience: classificationToAudience(proposal.classification),
+    });
+    if (!validation.ok) {
+      return {
+        ok: false,
+        code: "invalid_identifier",
+        messageJa: validation.messageJa,
+      };
+    }
+
     const partyProposal: PartyAudienceProposal = {
       kind: "party_audience",
       partyKind: "mail_address",
-      identifier: proposal.externalId,
+      identifier,
       audience: classificationToAudience(proposal.classification),
       originalSurface: "mail",
     };
@@ -449,12 +483,23 @@ export async function createConfigChangeRequest(
   }
 
   const diff = buildDiff(proposal, before);
-  const summary = buildApproverMessageJa({
+  let summary = buildApproverMessageJa({
     requester: value.requestedBy,
     employeeDisplayName: employee.displayName,
     diffSummaryJa: diff.summaryJa,
     reason: value.reason,
   });
+
+  // M2: warn when classifying external address as internal (reduces approval requirement)
+  if (
+    proposal.kind === "party_audience" &&
+    proposal.audience === "internal" &&
+    (before.kind !== "party" || !before.exists || before.audience !== "internal")
+  ) {
+    summary +=
+      "\n⚠️ 注意: このアドレスは社内として扱われ、外部送信の承認が不要になります。相手が本当に社内か確認してください。";
+  }
+
   const configChange: ConfigChangeMetadata = {
     version: 1,
     kind: proposal.kind,
@@ -469,6 +514,19 @@ export async function createConfigChangeRequest(
     requestedAt: new Date().toISOString(),
   };
 
+  // M1: party_audience uses admin class (same as parties.upsert) for self-approval blocking
+  const isPartyAudience = proposal.kind === "party_audience";
+  const approvalClass = isPartyAudience ? ADMIN_AUDIT_CLASS : CONFIG_CHANGE_APPROVAL_CLASS;
+
+  // M1: adminRequester enables assertNotSelfApproval for admin-class tickets
+  const adminRequester = isPartyAudience
+    ? {
+        kind: "admin_agent" as const,
+        grokBotAgentId: null,
+        actorId: input.credentialId || null,
+      }
+    : undefined;
+
   const created = await createApproval({
     orgId: input.orgId,
     employeeId: employee.id,
@@ -480,10 +538,11 @@ export async function createConfigChangeRequest(
     tool: CONFIG_CHANGE_TOOL,
     jobId: value.jobId,
     metadata: {
-      approvalClass: CONFIG_CHANGE_APPROVAL_CLASS,
-      auditClass: CONFIG_CHANGE_APPROVAL_CLASS,
+      approvalClass,
+      auditClass: approvalClass,
       always_human: true,
       configChange,
+      ...(adminRequester ? { adminRequester } : {}),
     },
   });
 
@@ -561,6 +620,17 @@ async function applyConfigChange(approval: ApprovalRequest): Promise<ConfigChang
   if (!employee || employee.status !== "active") return fail("employee_not_active");
 
   const proposal = meta.proposal;
+
+  // M3: re-check surface guard at fulfill time — pre-existing non-Slack tickets are rejected
+  // when the flag is turned ON after filing (fail-closed, nothing written)
+  if (
+    proposal.kind === "channel_classification" &&
+    proposal.surface !== "slack" &&
+    isConfigChannelClassificationSurfaceGuardEnabledForOrg(approval.orgId)
+  ) {
+    return fail("surface_guard_rejected");
+  }
+
   let applied: ConfigChangeApplied;
   let channelRowId: string | null = null;
   try {

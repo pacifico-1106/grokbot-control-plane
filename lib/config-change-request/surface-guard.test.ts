@@ -143,6 +143,37 @@ describe("flag OFF (regression)", () => {
     expect(res.code).toBe("needs_approval");
     assertPending(res);
   });
+
+  test("L1: flag OFF fulfill writes to org_channels, not org_parties", async () => {
+    const mailAddress = `${uniq("flagoff")}@example.com`;
+    const res = await createConfigChangeRequest(
+      {
+        orgId: ORG,
+        employeeId: "emp_comm",
+        credentialId: null,
+        args: {
+          kind: "channel_classification",
+          jobId: uniq("job-"),
+          requestedBy: requester,
+          channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
+        },
+      },
+      okDeps
+    );
+    assertPending(res);
+    expect(res.diffSummaryJa).toContain("チャネル");
+    expect(res.diffSummaryJa).not.toContain("メールアドレス");
+
+    const { fulfil } = await approveAndFulfil(res.approvalId);
+    expect(fulfil?.ok).toBe(true);
+    // Flag OFF: writes to org_channels
+    const channel = await getOrgChannel(ORG, "mail", mailAddress);
+    expect(channel).not.toBeNull();
+    expect(channel?.classification).toBe("internal");
+    // Flag OFF: does NOT write to org_parties
+    const party = await getOrgParty(ORG, "mail_address", mailAddress);
+    expect(party).toBeNull();
+  });
 });
 
 describe("flag ON", () => {
@@ -329,6 +360,93 @@ describe("flag ON", () => {
     expect(approval?.metadata?.always_human).toBe(true);
   });
 
+  test("M1: party_audience uses admin class (same as parties.upsert)", async () => {
+    const mailAddress = `${uniq("admin")}@example.com`;
+    const res = await createConfigChangeRequest(
+      {
+        orgId: ORG,
+        employeeId: "emp_comm",
+        credentialId: "cred_emp_comm",
+        args: {
+          kind: "channel_classification",
+          jobId: uniq("job-"),
+          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: "tanaka@example.com" },
+          channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
+        },
+      },
+      okDeps
+    );
+    assertPending(res);
+    const approval = await getApprovalById(res.approvalId, ORG);
+    // M1: party_audience must be admin class, not business
+    expect(approval?.metadata?.approvalClass).toBe("admin");
+    expect(approval?.metadata?.auditClass).toBe("admin");
+  });
+
+  test("M1: party_audience sets adminRequester for self-approval blocking", async () => {
+    const mailAddress = `${uniq("requester")}@example.com`;
+    const res = await createConfigChangeRequest(
+      {
+        orgId: ORG,
+        employeeId: "emp_comm",
+        credentialId: "cred_emp_comm",
+        args: {
+          kind: "channel_classification",
+          jobId: uniq("job-"),
+          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: "tanaka@example.com" },
+          channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
+        },
+      },
+      okDeps
+    );
+    assertPending(res);
+    const approval = await getApprovalById(res.approvalId, ORG);
+    // M1: adminRequester must be set for assertNotSelfApproval to work
+    const adminRequester = approval?.metadata?.adminRequester as Record<string, unknown> | undefined;
+    expect(adminRequester).toBeDefined();
+    expect(adminRequester?.kind).toBe("admin_agent");
+  });
+
+  test("M1: resolveApproval rejects self-approval for party_audience (admin class)", async () => {
+    const mailAddress = `${uniq("selfblock")}@example.com`;
+    const res = await createConfigChangeRequest(
+      {
+        orgId: ORG,
+        employeeId: "emp_comm",
+        credentialId: "cred_emp_comm",
+        args: {
+          kind: "channel_classification",
+          jobId: uniq("job-"),
+          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: "tanaka@example.com" },
+          channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
+        },
+      },
+      okDeps
+    );
+    assertPending(res);
+
+    // Attempt self-approval with same credentialId/actorId should fail
+    let selfApprovalDenied = false;
+    try {
+      await resolveApproval(res.approvalId, "approved", "cred_emp_comm", ORG, {
+        actorId: "cred_emp_comm",
+      });
+    } catch (error) {
+      selfApprovalDenied = error instanceof Error && error.message === "self_approval_denied";
+    }
+    expect(selfApprovalDenied).toBe(true);
+
+    // Human approver should succeed
+    const humanApproved = await resolveApproval(
+      res.approvalId,
+      "approved",
+      "owner@example.com",
+      ORG,
+      { actorId: "mem_owner" }
+    );
+    expect(humanApproved?.status).toBe("approved");
+  });
+
   test("rejection message guides to parties.upsert or internalAudienceRule.patch", async () => {
     const phone = "+81901234569";
     const res = await createConfigChangeRequest(
@@ -347,6 +465,74 @@ describe("flag ON", () => {
     );
     expect(res.ok).toBe(false);
     expect((res as { messageJa?: string }).messageJa).toMatch(/parties\.upsert|internalAudienceRule\.patch/);
+  });
+
+  test("M2: mail: prefix is stripped from identifier", async () => {
+    const rawAddress = `mail:${uniq("prefix")}@example.com`;
+    const expectedAddress = rawAddress.replace(/^mail:/, "");
+    const res = await createConfigChangeRequest(
+      {
+        orgId: ORG,
+        employeeId: "emp_comm",
+        credentialId: null,
+        args: {
+          kind: "channel_classification",
+          jobId: uniq("job-"),
+          requestedBy: requester,
+          channel: { surface: "mail", externalId: rawAddress, classification: "internal" },
+        },
+      },
+      okDeps
+    );
+    assertPending(res);
+    expect(res.diffSummaryJa).toContain(expectedAddress);
+    expect(res.diffSummaryJa).not.toContain("mail:");
+
+    const { fulfil } = await approveAndFulfil(res.approvalId);
+    expect(fulfil?.ok).toBe(true);
+    const party = await getOrgParty(ORG, "mail_address", expectedAddress);
+    expect(party).not.toBeNull();
+  });
+
+  test("M2: invalid email format is rejected (validatePartiesUpsertArgs)", async () => {
+    const invalidEmail = "not-an-email";
+    const res = await createConfigChangeRequest(
+      {
+        orgId: ORG,
+        employeeId: "emp_comm",
+        credentialId: null,
+        args: {
+          kind: "channel_classification",
+          jobId: uniq("job-"),
+          requestedBy: requester,
+          channel: { surface: "mail", externalId: invalidEmail, classification: "internal" },
+        },
+      },
+      okDeps
+    );
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe("invalid_identifier");
+  });
+
+  test("M2: external→internal shows warning in approval summary", async () => {
+    const mailAddress = `${uniq("ext2int")}@example.com`;
+    const res = await createConfigChangeRequest(
+      {
+        orgId: ORG,
+        employeeId: "emp_comm",
+        credentialId: null,
+        args: {
+          kind: "channel_classification",
+          jobId: uniq("job-"),
+          requestedBy: requester,
+          channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
+        },
+      },
+      okDeps
+    );
+    assertPending(res);
+    // M2: summary should contain warning about treating address as internal
+    expect(res.summary).toMatch(/社内として扱われ|外部送信の承認が不要/);
   });
 });
 
@@ -373,6 +559,71 @@ describe("flag ON with org_ids allowlist", () => {
       okDeps
     );
     expect(res.code).toBe("needs_approval");
+  });
+});
+
+describe("M3: fulfill-time guard re-check", () => {
+  test("pending non-Slack ticket filed with flag OFF is rejected at fulfill when flag turns ON", async () => {
+    // Step 1: Create ticket with flag OFF (existing behaviour)
+    guardOff();
+    const mailAddress = `${uniq("preexist")}@example.com`;
+    const res = await createConfigChangeRequest(
+      {
+        orgId: ORG,
+        employeeId: "emp_comm",
+        credentialId: null,
+        args: {
+          kind: "channel_classification",
+          jobId: uniq("job-"),
+          requestedBy: requester,
+          channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
+        },
+      },
+      okDeps
+    );
+    assertPending(res);
+
+    // Step 2: Turn flag ON before approval
+    guardOn();
+
+    // Step 3: Approve and attempt fulfill — should be rejected
+    const approved = await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, { actorId: "mem_owner" });
+    expect(approved?.status).toBe("approved");
+    const fulfil = await fulfillIfApproved(approved!, "approved");
+    expect(fulfil?.ok).toBe(false);
+    expect(fulfil?.error).toMatch(/surface_guard_rejected|surface_not_supported/);
+
+    // Verify nothing was written
+    const channel = await getOrgChannel(ORG, "mail", mailAddress);
+    expect(channel).toBeNull();
+    const party = await getOrgParty(ORG, "mail_address", mailAddress);
+    expect(party).toBeNull();
+  });
+
+  test("pending phone ticket filed with flag OFF is rejected at fulfill when flag turns ON", async () => {
+    guardOff();
+    const phoneNumber = "+81901234590";
+    const res = await createConfigChangeRequest(
+      {
+        orgId: ORG,
+        employeeId: "emp_comm",
+        credentialId: null,
+        args: {
+          kind: "channel_classification",
+          jobId: uniq("job-"),
+          requestedBy: requester,
+          channel: { surface: "phone", externalId: phoneNumber, classification: "internal" },
+        },
+      },
+      okDeps
+    );
+    assertPending(res);
+
+    guardOn();
+    const approved = await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, { actorId: "mem_owner" });
+    expect(approved?.status).toBe("approved");
+    const fulfil = await fulfillIfApproved(approved!, "approved");
+    expect(fulfil?.ok).toBe(false);
   });
 });
 

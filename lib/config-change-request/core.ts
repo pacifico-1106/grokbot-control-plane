@@ -24,6 +24,9 @@ const DIFF_LINES_MAX = 200;
 export const CONFIG_CHANGE_KINDS = ["instructions", "channel_classification", "channel_remove", "party_audience"] as const;
 export type ConfigChangeKind = (typeof CONFIG_CHANGE_KINDS)[number];
 
+/** L2: public kinds for API/tool documentation (party_audience is internal-only redirect) */
+export const PUBLIC_CONFIG_CHANGE_KINDS = ["instructions", "channel_classification", "channel_remove"] as const;
+
 /**
  * Settings that stay blocked from the AI regardless of this feature.
  * (approvers / permissions / billing are human-console only.)
