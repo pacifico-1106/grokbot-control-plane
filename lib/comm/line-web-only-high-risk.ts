@@ -3,6 +3,7 @@
  * LINE postback refuses these and tells the approver to use /app/approvals.
  * Unclassifiable tickets are refused (fail-closed).
  */
+import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
 import { isHoldReleaseTicket } from "@/lib/safety/hold-config";
 
 export type LineWebOnlyHighRiskRef = {
@@ -84,9 +85,50 @@ export const LINE_WEB_ONLY_HIGH_RISK: readonly LineWebOnlyHighRiskItem[] = [
 
 export const LINE_WEB_ONLY_HIGH_RISK_NOT_GATED = [] as const;
 
+/** LINE postback may approve only these, and only with a classifiable policy. */
+export const LINE_SURFACE_ALLOW_TOOLS = new Set([
+  "comm.reply",
+  "comm.send",
+  "slack.post",
+  "mail.send",
+  "browser.use",
+]);
+
+const CLASSIFIABLE_POLICY = new Set(["risk_based", "auto", "needs_approval"]);
 const MONEY_TOOLS = new Set(["commerce.order", "commerce.quote"]);
 const SECRET_RE = /credential|secret/i;
 const POLICY_RE = /policy|config_change|approvalWorkflow|approvalRoutes|ingressHandoff|mailPolicy|replyPolicy|schedulingPolicy|internalAudience/i;
+
+export function approvalTicketPolicyMetadata(input: {
+  tool?: string | null;
+  purpose?: string | null;
+  employeeApprovalPolicy?: string | null;
+  toolHint?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): {
+  approvalPolicy: string | null;
+  employeeAlwaysHuman: boolean;
+  approvalClass: "admin" | "business";
+  always_human: boolean;
+} {
+  const md = input.metadata ?? {};
+  const employeeAlwaysHuman = input.employeeApprovalPolicy === "always_human" || md.employeeAlwaysHuman === true;
+  const policyFromMeta = typeof md.approvalPolicy === "string" && md.approvalPolicy.trim() ? md.approvalPolicy.trim() : null;
+  const approvalPolicy =
+    employeeAlwaysHuman || input.toolHint === "always_human" || md.always_human === true
+      ? "always_human"
+      : policyFromMeta ||
+        (input.employeeApprovalPolicy && input.employeeApprovalPolicy.trim()) ||
+        (input.toolHint === "auto" || input.toolHint === "risk_based" ? input.toolHint : null);
+  const alwaysHuman = approvalPolicy === "always_human" || md.always_human === true;
+  const approvalClass =
+    md.approvalClass === "admin" || md.approvalClass === "business"
+      ? md.approvalClass
+      : isAdminClassApproval({ tool: input.tool, purpose: input.purpose, metadata: md })
+        ? "admin"
+        : "business";
+  return { approvalPolicy, employeeAlwaysHuman, approvalClass, always_human: alwaysHuman };
+}
 
 export type LineWebOnlyHighRiskVerdict = {
   refuse: boolean;
@@ -104,6 +146,17 @@ export function lineWebOnlyHighRiskVerdict(approval: {
   }
   const md = approval.metadata ?? {};
   const tool = String(md.adminTool ?? approval.tool ?? "").trim();
+  if (
+    md.always_human === true ||
+    md.approvalPolicy === "always_human" ||
+    md.toolHint === "always_human" ||
+    md.employeeAlwaysHuman === true
+  ) {
+    return { refuse: true, reason: "line_web_only_always_human", category: "always_human" };
+  }
+  if (md.approvalClass === "admin" || md.auditClass === "admin") {
+    return { refuse: true, reason: "line_web_only_admin", category: "ポリシー変更" };
+  }
   if (!tool) return { refuse: true, reason: "line_web_only_unclassified", category: "unknown" };
   if (MONEY_TOOLS.has(tool) || tool.startsWith("commerce.")) {
     return { refuse: true, reason: "line_web_only_money", category: "金銭" };
@@ -114,12 +167,12 @@ export function lineWebOnlyHighRiskVerdict(approval: {
   if (POLICY_RE.test(tool) || tool.includes("policy")) {
     return { refuse: true, reason: "line_web_only_policy", category: "ポリシー変更" };
   }
-  if (
-    md.approvalPolicy === "always_human" ||
-    md.toolHint === "always_human" ||
-    md.employeeAlwaysHuman === true
-  ) {
-    return { refuse: true, reason: "line_web_only_always_human", category: "always_human" };
+  if (!LINE_SURFACE_ALLOW_TOOLS.has(tool)) {
+    return { refuse: true, reason: "line_web_only_default_deny", category: "unknown" };
+  }
+  const policy = typeof md.approvalPolicy === "string" ? md.approvalPolicy : "";
+  if (!CLASSIFIABLE_POLICY.has(policy)) {
+    return { refuse: true, reason: "line_web_only_unclassified", category: "unknown" };
   }
   return { refuse: false, reason: "", category: "" };
 }

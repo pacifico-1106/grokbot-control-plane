@@ -48,6 +48,7 @@ import {
   LINE_WEB_ONLY_APPROVE_JA_OF,
   LINE_WEB_ONLY_APPROVE_PATH,
 } from "@/lib/comm/line-poc-copy";
+import { isLineWebOnlyHighRiskEnabled } from "@/lib/comm/flags";
 import { lineWebOnlyHighRiskVerdict } from "@/lib/comm/line-web-only-high-risk";
 import { isLineLinkCodeLimitsEnabled } from "@/lib/line/link-code-limits";
 import { getAppOrigin } from "@/lib/approvals/tokens";
@@ -207,24 +208,33 @@ async function handlePostback(channel: NotificationChannelRuntime, event: LineAp
     await reply(channel, event, gate.reason === "missing_user_id" ? MSG_NO_USER : MSG_FORBIDDEN);
     return;
   }
-  if (match[1] === "a") {
+  if (match[1] === "a" && isLineWebOnlyHighRiskEnabled(channel.orgId)) {
     const verdict = lineWebOnlyHighRiskVerdict(approval);
     if (verdict.refuse) {
-      await appendAuditEvent({
-        orgId: channel.orgId,
-        employeeId: approval.employeeId,
-        credentialId: null,
-        action: "line.web_only_refused",
-        purpose: approval.purpose ?? null,
-        summary: "LINE postback refused high-risk approval (web only until passkeys)",
-        metadata: {
-          event: "line_web_only_high_risk",
+      try {
+        await appendAuditEvent({
+          orgId: channel.orgId,
+          employeeId: approval.employeeId,
+          credentialId: null,
+          action: "line.web_only_refused",
+          purpose: approval.purpose ?? null,
+          summary: "LINE postback refused high-risk approval (web only until passkeys)",
+          metadata: {
+            event: "line_web_only_high_risk",
+            approvalId: approval.id,
+            reason: verdict.reason,
+            category: verdict.category,
+            webPath: LINE_WEB_ONLY_APPROVE_PATH,
+          },
+        });
+      } catch (err) {
+        console.error("line_web_only_refused_audit_failed", {
+          orgId: channel.orgId,
           approvalId: approval.id,
           reason: verdict.reason,
-          category: verdict.category,
-          webPath: LINE_WEB_ONLY_APPROVE_PATH,
-        },
-      }).catch(() => undefined);
+          err,
+        });
+      }
       await reply(
         channel,
         event,

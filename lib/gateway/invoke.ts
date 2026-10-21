@@ -67,6 +67,7 @@ import {
   lineWaiveExternalDeny,
 } from "@/lib/comm/line-invoke";
 import { isLineConversationEnabled } from "@/lib/comm/flags";
+import { approvalTicketPolicyMetadata } from "@/lib/comm/line-web-only-high-risk";
 import { conversationTokenCounterparty, conversationTokenFromRequest } from "@/lib/comm/conversation-token";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
 import { accessibleProjects } from "@/lib/employees/project-access";
@@ -574,6 +575,13 @@ async function createNeedsApprovalResponse(opts: {
       parentApprovalId: opts.parentApprovalId,
       metadata: {
         ...(opts.metadata ?? {}),
+        ...approvalTicketPolicyMetadata({
+          tool: opts.tool,
+          purpose: opts.purpose,
+          employeeApprovalPolicy: opts.employee?.approvalPolicy,
+          toolHint: opts.employee?.toolApprovalDefaults?.[opts.tool],
+          metadata: opts.metadata,
+        }),
         artifact,
         invoke: invokeSnapshot,
         // mail.send: pin the exact approved content (digests only) so an

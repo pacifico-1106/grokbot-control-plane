@@ -1045,6 +1045,89 @@ try:
           "anon/authenticated cannot execute; no token/hash/prefix columns; "
           "12 concurrent employee_on_hold → 1 insert; re-applicable; "
           "rollback drops RPC + hold_id and restores the 3-kind CHECK; forward again.")
+    # Conversation link codes (20261021100000). Depends on employee_comm_accounts.
+    lclc = ROOT / "supabase/migrations/20261021100000_line_conversation_link_codes.sql"
+    lclc_rb = ROOT / "supabase/verification/20261021100000_line_conversation_link_codes_rollback.sql"
+    sql(lclc)
+    sql(lclc)  # re-applicable
+    sql(ROOT / "tests/security/db-line-conversation-link-codes.sql")
+    query("insert into public.orgs(id, name) values ('c0211000-0000-4000-8000-0000000000f1', 'lclc rb');"
+          "insert into public.org_members(id, org_id, email, role, status) values"
+          " ('c0211000-0000-4000-8000-0000000000f2', 'c0211000-0000-4000-8000-0000000000f1', 'lclc-rb@fixture.invalid', 'admin', 'active');"
+          "insert into public.employees(id, org_id, display_name, role_label) values"
+          " ('c0211000-0000-4000-8000-0000000000f3', 'c0211000-0000-4000-8000-0000000000f1', 'lclc rb', 'staff');"
+          "insert into public.employee_comm_accounts(id, org_id, employee_id, surface, external_account_id, webhook_ref, status)"
+          " values ('c0211000-0000-4000-8000-0000000000f4', 'c0211000-0000-4000-8000-0000000000f1',"
+          "  'c0211000-0000-4000-8000-0000000000f3', 'line', 'U' || repeat('e', 32), repeat('E', 43), 'active');"
+          "insert into public.line_conversation_link_codes(org_id, account_id, member_id, code_hash, expires_at) values"
+          " ('c0211000-0000-4000-8000-0000000000f1', 'c0211000-0000-4000-8000-0000000000f4',"
+          "  'c0211000-0000-4000-8000-0000000000f2', repeat('22', 32), now() + interval '15 minutes');")
+    try:
+        sql(lclc_rb)
+        raise AssertionError("conversation link-code rollback ran while an unused code existed")
+    except subprocess.CalledProcessError:
+        pass
+    assert query("select to_regclass('public.line_conversation_link_codes') is not null;") == "t"
+    query("delete from public.orgs where id = 'c0211000-0000-4000-8000-0000000000f1';")
+    sql(lclc_rb)
+    assert query("select to_regclass('public.line_conversation_link_codes') is null;") == "t"
+    sql(lclc)  # forward again after rollback
+    sql(ROOT / "tests/security/db-line-conversation-link-codes.sql")
+    print("PASS: line_conversation_link_codes (20261021100000): RLS on, restrictive deny-all only, "
+          "anon/authenticated no access; HMAC-only (64 hex), same-org member/account FK, "
+          "org delete cascades, no plaintext column; re-applicable; "
+          "rollback refused while an unused code exists, then drops the table; forward again.")
+    # Atomic voter-binding RPC (20261021110000). Concurrent first INSERT cannot re-point.
+    upvb = ROOT / "supabase/migrations/20261021110000_upsert_proof_verified_voter_binding.sql"
+    upvb_rb = ROOT / "supabase/verification/20261021110000_upsert_proof_verified_voter_binding_rollback.sql"
+    sql(upvb)
+    sql(upvb)  # re-applicable
+    sql(ROOT / "tests/security/db-upsert-proof-verified-voter-binding.sql")
+    upvb_org, upvb_a, upvb_b = (
+        "b0211100-0000-4000-8000-0000000000c1",
+        "b0211100-0000-4000-8000-0000000000c2",
+        "b0211100-0000-4000-8000-0000000000c3",
+    )
+    query(f"insert into public.orgs(id, name) values ('{upvb_org}', 'upvb concurrent');"
+          f"insert into public.org_members(id, org_id, email, role, status) values"
+          f" ('{upvb_a}', '{upvb_org}', 'upvb-ca@fixture.invalid', 'admin', 'active'),"
+          f" ('{upvb_b}', '{upvb_org}', 'upvb-cb@fixture.invalid', 'admin', 'active');")
+    def _psql_upvb(cmd):
+        p = subprocess.run([str(BIN / "psql"), "-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-h", str(cluster),
+                            "-p", "55439", "-U", "test_admin", "-d", "postgres", "-c", cmd],
+                           env=env, capture_output=True, text=True)
+        return p.returncode, p.stdout.strip(), p.stderr
+    upvb_cmds = [
+        (f"set role service_role; select public.upsert_proof_verified_voter_binding("
+         f"'{upvb_org}','line','chn-race','U-race','{upvb_a}',null,now() + interval '180 days')::text;"),
+        (f"set role service_role; select public.upsert_proof_verified_voter_binding("
+         f"'{upvb_org}','line','chn-race','U-race','{upvb_b}',null,now() + interval '180 days')::text;"),
+    ]
+    from concurrent.futures import ThreadPoolExecutor as _UpvbPool
+    with _UpvbPool(max_workers=2) as pool:
+        upvb_res = list(pool.map(_psql_upvb, upvb_cmds))
+    assert all(rc == 0 for rc, _, _ in upvb_res), [e for _, _, e in upvb_res]
+    upvb_outs = [o.splitlines()[-1] if o else "" for _, o, _ in upvb_res]
+    upvb_ok = sum(1 for o in upvb_outs if '"ok":true' in o.replace(" ", ""))
+    upvb_deny = sum(1 for o in upvb_outs if "bound_to_other_member" in o)
+    assert upvb_ok == 1 and upvb_deny == 1, upvb_outs
+    upvb_member = query(
+        f"select member_id from public.approval_workflow_voter_bindings"
+        f" where org_id = '{upvb_org}' and provider = 'line'"
+        f" and channel_key = 'chn-race' and external_user_id = 'U-race';"
+    )
+    assert upvb_member in (upvb_a, upvb_b), upvb_member
+    query(f"delete from public.orgs where id = '{upvb_org}';")
+    sql(upvb_rb)
+    assert query(
+        "select to_regprocedure('public.upsert_proof_verified_voter_binding(uuid,text,text,text,uuid,text,timestamptz)') is null;"
+    ) == "t"
+    sql(upvb)  # forward again after rollback
+    sql(ROOT / "tests/security/db-upsert-proof-verified-voter-binding.sql")
+    print("PASS: upsert_proof_verified_voter_binding (20261021110000): EXECUTE service_role only; "
+          "sequential rebind → bound_to_other_member; concurrent first INSERT → one winner, "
+          "the other bound_to_other_member (no last-writer-wins); re-applicable; "
+          "rollback drops the function; forward again.")
     print("PASS: approver authority (PR-D): owner / designated admin decision table; flag-OFF 7-argument W1 call unchanged; standard ticket → designated admin stored, others refused; owner ticket → designated admin endorsed once and kept pending, owner approves and is stored; zero owners stop; multiple owners: any one owner other than the requester (requesting owner refused; a sole owner's own approval counts; several owners all requesters → no_owner_other_than_requester); reject / non-target not gated; record_approver_authority verified/endorse; one RPC overload; EXECUTE service_role only; rollback restores the 7-argument RPC + re-apply.")
     print("PASS: approver context CAS (TOCTOU follow-up): policy.patch / schedulingPolicy.patch writes only when the locked row still equals the pinned snapshot; concurrent change between check and write → approver_context_changed with nothing written (employee row, active and revoked credentials, org / employee scheduling policy); ticket binding (fingerprint, missing fingerprint, status, tool, target, org) refused; invalid input refused; EXECUTE service_role only; 12 concurrent writers with one snapshot → exactly 1 write (both RPCs); rollback drops both RPCs (PR-D untouched) + re-apply.")
     print("PASS: employee_webhook_settings (D9): RLS on, no policy, anon/authenticated denied, service_role reads/writes/upserts; cross-org row rejected; payload mode minimal|legacy_full (default minimal); ciphertext-only secret + fingerprint pair; employee delete cascades; rollback + re-apply.")

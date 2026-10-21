@@ -588,6 +588,7 @@ export async function upsertProofVerifiedVoterBinding(
   if (isDemoMode()) {
     const key = bindingKey(input);
     const previous = demoBindings.get(key);
+    // Same as the RPC: update only when revoked, expired, unverified, or same member.
     if (previous && computeEffectiveStatus(previous) === "active" && previous.memberId !== input.memberId) {
       return {
         ok: false,

@@ -1,5 +1,7 @@
--- M4: atomic proof-verified voter binding (no get-then-upsert race).
--- An active binding to another member is never re-pointed.
+-- M4 / M2: atomic proof-verified voter binding (no get-then-upsert race).
+-- Concurrent first INSERTs must not last-writer-win: ON CONFLICT updates only
+-- when the existing row is revoked, unverified, expired, or the same member.
+-- Zero updated rows → bound_to_other_member.
 -- Flags that call upsertProofVerifiedVoterBinding default OFF; apply before ON.
 begin;
 set local lock_timeout = '5s';
@@ -26,22 +28,6 @@ begin
     return jsonb_build_object('ok', false, 'reason', 'invalid_input');
   end if;
 
-  select * into r
-    from public.approval_workflow_voter_bindings
-   where org_id = p_org
-     and provider = p_provider
-     and channel_key = p_channel_key
-     and external_user_id = p_external_user_id
-   for update;
-
-  if found
-     and r.revoked_at is null
-     and r.verified_at is not null
-     and (r.expires_at is null or r.expires_at > now_ts)
-     and r.member_id is distinct from p_member_id then
-    return jsonb_build_object('ok', false, 'reason', 'bound_to_other_member');
-  end if;
-
   insert into public.approval_workflow_voter_bindings (
     org_id, provider, channel_key, external_user_id, member_id, team_id,
     expires_at, revoked_at, verified_at, verification_hash, verification_expiry,
@@ -61,7 +47,16 @@ begin
         verification_nonce = null,
         failed_verification_attempts = 0,
         updated_at = excluded.updated_at
+  where approval_workflow_voter_bindings.revoked_at is not null
+     or approval_workflow_voter_bindings.verified_at is null
+     or (approval_workflow_voter_bindings.expires_at is not null
+         and approval_workflow_voter_bindings.expires_at <= now_ts)
+     or approval_workflow_voter_bindings.member_id is not distinct from excluded.member_id
   returning * into r;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'bound_to_other_member');
+  end if;
 
   return jsonb_build_object('ok', true, 'row', to_jsonb(r));
 end;
@@ -71,13 +66,14 @@ revoke all on function public.upsert_proof_verified_voter_binding(uuid, text, te
 grant execute on function public.upsert_proof_verified_voter_binding(uuid, text, text, text, uuid, text, timestamptz) to service_role;
 
 comment on function public.upsert_proof_verified_voter_binding(uuid, text, text, text, uuid, text, timestamptz) is
-  'Atomic proof-verified voter binding. Refuses to re-point an active binding to another member.';
+  'Atomic proof-verified voter binding. ON CONFLICT updates only revoked / unverified / expired / same member; else bound_to_other_member.';
 
 commit;
 
--- ROLLBACK
+-- ROLLBACK (down)
 -- supabase/verification/20261021110000_upsert_proof_verified_voter_binding_rollback.sql
 --   begin;
 --   set local lock_timeout = '5s';
 --   drop function if exists public.upsert_proof_verified_voter_binding(uuid, text, text, text, uuid, text, timestamptz);
 --   commit;
+-- END ROLLBACK

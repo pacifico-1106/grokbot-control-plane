@@ -32,6 +32,7 @@ import { getOrgApprovalWorkflowPolicy } from "@/lib/approval-workflow/data";
 import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
 import { approverFilingStop } from "@/lib/approver-authority/filing";
 import { ADMIN_TOOL_TITLE_JA } from "@/lib/admin-mcp/tool-titles-ja";
+import { approvalTicketPolicyMetadata } from "@/lib/comm/line-web-only-high-risk";
 
 export { ADMIN_TOOL_TITLE_JA };
 
@@ -261,6 +262,17 @@ export async function queueAdminTool(input: {
       adminMutation: input.args,
       adminRequester: requester,
       ...requesterExtra,
+      ...approvalTicketPolicyMetadata({
+        tool: input.tool,
+        purpose: auditAction,
+        metadata: {
+          auditClass: ADMIN_AUDIT_CLASS,
+          approvalClass: ADMIN_AUDIT_CLASS,
+          always_human: true,
+          adminTool: input.tool,
+          isAdminMcpTool: true,
+        },
+      }),
     },
   });
 

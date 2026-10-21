@@ -66,3 +66,18 @@ export function isLineConversationEnabled(orgId?: string | null): boolean {
 export function isLineWebhookAutoSetupEnabled(orgId?: string | null): boolean {
   return isLineConversationEnabled(orgId) && parseFlag(process.env.LINE_WEBHOOK_AUTO_SETUP_ENABLED);
 }
+
+/**
+ * Until passkeys: refuse high-risk LINE postback approve.
+ * Default OFF so existing `/api/webhooks/line/<ref>` stays as main.
+ * Conversation ON for an org forces this gate on.
+ * LINE_WEB_ONLY_HIGH_RISK_ORG_IDS narrows the flag (missing orgId → off).
+ */
+export function isLineWebOnlyHighRiskEnabled(orgId?: string | null): boolean {
+  if (isLineConversationEnabled(orgId)) return true;
+  if (!parseFlag(process.env.LINE_WEB_ONLY_HIGH_RISK_ENABLED)) return false;
+  const allowed = parseOrgAllowlist(process.env.LINE_WEB_ONLY_HIGH_RISK_ORG_IDS);
+  if (!allowed) return true;
+  if (!orgId) return false;
+  return allowed.has(orgId.trim().toLowerCase());
+}
