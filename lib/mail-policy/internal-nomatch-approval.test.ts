@@ -3,16 +3,22 @@
  *
  * When audience=internal AND no rule matches AND the first rule is
  * audience=external, return needs_approval like an empty rule list instead of
- * borrowing the first (external) rule's draft/reject.
+ * borrowing the first (external) rule's draft.
+ *
+ * First-rule reject (attachment forbid / CC forbid / D1 none) stays reject —
+ * the flag must not loosen a hard deny. Invoke and fulfill share this
+ * evaluator (evaluateMailPolicyForRequest).
  *
  * Master flag + _ORG_IDS, default OFF. OFF must match main.
- * fail-first: these cases are written before the evaluator change.
+ * fail-first: reject-keep ON cases are written before the evaluator change.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { isMailPolicyInternalNomatchApprovalEnabledForOrg } from "@/lib/feature-flags";
 import { evaluateMailPolicy } from "./apply";
 import { defaultMailPolicy, normalizeMailPolicy } from "./validate";
 import type {
   MailPolicyRule,
+  OrgIngressHandoffPolicy,
   OrgInternalAudienceRule,
   OrgMailPolicy,
 } from "@/lib/types";
@@ -90,6 +96,49 @@ function evalEmptyInternal(orgId: string) {
     internalAudienceRule: INTERNAL,
     orgId,
   });
+}
+
+function attachmentForbidPolicy(): OrgMailPolicy {
+  return makePolicy([
+    { audience: "external", sendMode: "draft_only", attachmentPolicyRef: "forbid" },
+  ]);
+}
+
+function ccForbidPolicy(): OrgMailPolicy {
+  return makePolicy([{ audience: "external", sendMode: "draft_only", allowCc: false }]);
+}
+
+function d1None(): OrgIngressHandoffPolicy {
+  return {
+    version: 1,
+    policyId: "ihp_d1_none",
+    policyName: "D1 none",
+    rules: [
+      {
+        id: "ihr_0",
+        applyTo: "all",
+        body: "full",
+        attachment: "none",
+        sealith: "off",
+        audit: { jobId: true, sealithTransferId: false },
+      },
+    ],
+    updatedAt: "2026-10-01T00:00:00Z",
+    updatedBy: "admin_mcp",
+  };
+}
+
+function expectReject(
+  d: ReturnType<typeof evaluateMailPolicy>,
+  rejectCode: string,
+  appliedRuleId: string
+) {
+  expect(d.rejected).toBe(true);
+  expect(d.rejectCode).toBe(rejectCode);
+  expect(d.needsApproval).toBe(false);
+  expect(d.demotedToDraft).toBe(false);
+  expect(d.autoSend).toBe(false);
+  expect(d.appliedRules).toContain(appliedRuleId);
 }
 
 beforeEach(() => {
@@ -230,5 +279,222 @@ describe("MAIL_POLICY_INTERNAL_NOMATCH_APPROVAL_ORG_IDS: out-of-list org is not 
     expect(d.demotedToDraft).toBe(false);
     expect(d.appliedRules).toEqual([]);
     expect(d.sendMode).toBe("needs_approval");
+  });
+});
+
+describe("L1: orgId null / empty / omitted is OFF", () => {
+  test("helper: null / \"\" / undefined stay false when master flag is ON", () => {
+    flagOn();
+    expect(isMailPolicyInternalNomatchApprovalEnabledForOrg(null)).toBe(false);
+    expect(isMailPolicyInternalNomatchApprovalEnabledForOrg("")).toBe(false);
+    expect(isMailPolicyInternalNomatchApprovalEnabledForOrg(undefined)).toBe(false);
+    expect(isMailPolicyInternalNomatchApprovalEnabledForOrg(ORG_IN)).toBe(true);
+  });
+
+  test("evaluator: orgId null keeps first-rule draft (OFF)", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: defaultMailPolicy(),
+      to: "a@ourco.example",
+      internalAudienceRule: INTERNAL,
+      orgId: null,
+    });
+    expect(d.audience).toBe("internal");
+    expect(d.demotedToDraft).toBe(true);
+    expect(d.needsApproval).toBe(false);
+    expect(d.sendMode).toBe("draft_only");
+    expect(d.appliedRules).toContain("mpr_default_external");
+  });
+
+  test("evaluator: orgId \"\" keeps first-rule draft (OFF)", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: defaultMailPolicy(),
+      to: "a@ourco.example",
+      internalAudienceRule: INTERNAL,
+      orgId: "",
+    });
+    expect(d.audience).toBe("internal");
+    expect(d.demotedToDraft).toBe(true);
+    expect(d.needsApproval).toBe(false);
+    expect(d.sendMode).toBe("draft_only");
+    expect(d.appliedRules).toContain("mpr_default_external");
+  });
+
+  test("evaluator: orgId omitted keeps first-rule draft (OFF)", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: defaultMailPolicy(),
+      to: "a@ourco.example",
+      internalAudienceRule: INTERNAL,
+    });
+    expect(d.audience).toBe("internal");
+    expect(d.demotedToDraft).toBe(true);
+    expect(d.needsApproval).toBe(false);
+    expect(d.sendMode).toBe("draft_only");
+    expect(d.appliedRules).toContain("mpr_default_external");
+  });
+});
+
+describe("L2: mixed / internal CC / internal BCC / empty rules stay external draft", () => {
+  test("internal To + external CC stays external draft (not loosened to approval)", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: defaultMailPolicy(),
+      to: "a@ourco.example",
+      cc: ["x@customer.example"],
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expect(d.audience).toBe("external");
+    expect(d.demotedToDraft).toBe(true);
+    expect(d.needsApproval).toBe(false);
+    expect(d.rejected).toBe(false);
+    expect(d.sendMode).toBe("draft_only");
+    expect(d.code).toBe("mail_send_demoted_to_draft");
+  });
+
+  test("external To + internal CC stays external draft", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: defaultMailPolicy(),
+      to: "x@customer.example",
+      cc: ["a@ourco.example"],
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expect(d.audience).toBe("external");
+    expect(d.demotedToDraft).toBe(true);
+    expect(d.needsApproval).toBe(false);
+    expect(d.rejected).toBe(false);
+    expect(d.sendMode).toBe("draft_only");
+  });
+
+  test("external To + internal BCC stays external draft", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: defaultMailPolicy(),
+      to: "x@customer.example",
+      bcc: ["a@ourco.example"],
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expect(d.audience).toBe("external");
+    expect(d.demotedToDraft).toBe(true);
+    expect(d.needsApproval).toBe(false);
+    expect(d.rejected).toBe(false);
+    expect(d.sendMode).toBe("draft_only");
+  });
+
+  test("empty rules + external To stays draft (never loosened)", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: { ...defaultMailPolicy(), rules: [] },
+      to: "x@customer.example",
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expect(d.audience).toBe("external");
+    expect(d.demotedToDraft).toBe(true);
+    expect(d.needsApproval).toBe(false);
+    expect(d.sendMode).toBe("draft_only");
+    expect(d.code).toBe("mail_send_demoted_to_draft");
+    expect(d.appliedRules).toEqual([]);
+  });
+});
+
+/**
+ * Shared by invoke and fulfill (evaluateMailPolicyForRequest → evaluateMailPolicy).
+ * First-rule reject must stay reject even when the flag skips the draft borrow.
+ */
+describe("reject keep: attachment forbid / CC forbid / D1 none (OFF)", () => {
+  test("attachment + first-rule forbid → mail_policy_attachment_forbidden", () => {
+    const d = evaluateMailPolicy({
+      policy: attachmentForbidPolicy(),
+      to: "a@ourco.example",
+      hasAttachments: true,
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expectReject(d, "mail_policy_attachment_forbidden", "mpr_0");
+  });
+
+  test("CC + first-rule allowCc=false → mail_cc_forbidden", () => {
+    const d = evaluateMailPolicy({
+      policy: ccForbidPolicy(),
+      to: "a@ourco.example",
+      cc: ["b@ourco.example"],
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expectReject(d, "mail_cc_forbidden", "mpr_0");
+  });
+
+  test("attachment + D1 none → d1_attachment_none", () => {
+    const d = evaluateMailPolicy({
+      policy: defaultMailPolicy(),
+      to: "a@ourco.example",
+      hasAttachments: true,
+      ingressHandoffPolicy: d1None(),
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expectReject(d, "d1_attachment_none", "mpr_default_external");
+  });
+});
+
+describe("reject keep: attachment forbid / CC forbid / D1 none (ON)", () => {
+  test("attachment + first-rule forbid stays reject (not needs_approval)", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: attachmentForbidPolicy(),
+      to: "a@ourco.example",
+      hasAttachments: true,
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expectReject(d, "mail_policy_attachment_forbidden", "mpr_0");
+  });
+
+  test("CC + first-rule allowCc=false stays reject (not needs_approval)", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: ccForbidPolicy(),
+      to: "a@ourco.example",
+      cc: ["b@ourco.example"],
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expectReject(d, "mail_cc_forbidden", "mpr_0");
+  });
+
+  test("attachment + D1 none stays reject (not needs_approval)", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: defaultMailPolicy(),
+      to: "a@ourco.example",
+      hasAttachments: true,
+      ingressHandoffPolicy: d1None(),
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expectReject(d, "d1_attachment_none", "mpr_default_external");
+  });
+
+  test("allowed attachment + first-rule draft still relaxes to needs_approval", () => {
+    flagOn();
+    const d = evaluateMailPolicy({
+      policy: defaultMailPolicy(),
+      to: "a@ourco.example",
+      hasAttachments: true,
+      internalAudienceRule: INTERNAL,
+      orgId: ORG_IN,
+    });
+    expect(d.audience).toBe("internal");
+    expect(d.needsApproval).toBe(true);
+    expect(d.rejected).toBe(false);
+    expect(d.demotedToDraft).toBe(false);
+    expect(d.sendMode).toBe("needs_approval");
+    expect(d.appliedRules).toEqual([]);
   });
 });
