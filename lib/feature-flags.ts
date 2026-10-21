@@ -1323,7 +1323,8 @@ export function isConfigChannelClassificationSurfaceGuardEnabledForOrg(
  *
  * evaluateForRecipient: audience=internal AND no rule matched AND the first
  * rule is audience=external → return needs_approval like an empty rule list
- * instead of borrowing the first (external) rule's draft/reject.
+ * instead of borrowing the first (external) rule's draft. A first-rule
+ * reject (attachment forbid / CC forbid / D1 none / etc.) is kept.
  *
  * When OFF (default): existing behavior — unmatched internal keeps a stricter
  * first-rule draft (e.g. default mpr_default_external).
