@@ -182,6 +182,7 @@ import {
   evaluateAuthActionLinkPolicy,
   buildAuthActionLinkApprovalSummary,
   buildAuthActionLinkArtifactLines,
+  maskAuthActionLinkSecretsInBody,
   type AuthActionLinkPolicyResult,
 } from "@/lib/gateway/auth-action-link-policy";
 import { getOrgChannel } from "@/lib/data/directory";
@@ -769,6 +770,12 @@ export type RunGatewayInvokeInput = {
    * gb_emp_ callers leave this unset → audit rows unchanged.
    */
   oauth?: { grantId: string; clientHost: string } | null;
+  /**
+   * H1: Org ID for secret detection org-scoped flag check.
+   * When set, used directly. When absent, resolved from employee record.
+   * Fail-closed: detection runs without org exemption if lookup fails.
+   */
+  orgId?: string | null;
 };
 
 /**
@@ -880,10 +887,12 @@ async function runGatewayInvokeInner(
   // (org of the authenticated employee, never the body's), with no value; a
   // failed write never turns the rejection into a pass. tool / purpose / jobId
   // are echoed only when they are clean themselves.
-  const secretDetection = detectSecretInPayload(omitMailAttachmentBinary(body));
+  // H1: Org-scoped secret detection for auth action link exemption.
+  const secretDetectionOrgId = input.orgId ?? (await secretAuditOrgId(employeeId));
+  const secretDetection = detectSecretInPayload(omitMailAttachmentBinary(body), { orgId: secretDetectionOrgId });
   if (!secretDetection.ok || secretDetection.suspected) {
     const scope = {
-      orgId: await secretAuditOrgId(employeeId),
+      orgId: secretDetectionOrgId,
       employeeId,
       credentialId: input.credentialId ?? null,
       surface: "gateway_invoke" as const,
@@ -2515,8 +2524,10 @@ async function runGatewayInvokeInner(
       const toInfo = collectMailToRecipients(body);
       const recipients = extractMailRecipients(body);
       const parsedTo = parseMailRecipientList(toInfo.to);
-      const parsedCc = recipients.cc.flatMap((c) => parseMailRecipientList(c).recipients);
-      const parsedBcc = recipients.bcc.flatMap((b) => parseMailRecipientList(b).recipients);
+      // L: Use raw CC/BCC array lengths to detect presence (including malformed).
+      // Malformed CC/BCC like "not-an-email" should still trigger has_cc_or_bcc.
+      const rawCcCount = recipients.cc.length;
+      const rawBccCount = recipients.bcc.length;
       const authLinkPolicy = evaluateAuthActionLinkPolicy({
         orgId,
         secretDetection,
@@ -2527,8 +2538,8 @@ async function runGatewayInvokeInner(
         },
         recipients: {
           toCount: parsedTo.recipients.length,
-          ccCount: parsedCc.length,
-          bccCount: parsedBcc.length,
+          ccCount: rawCcCount,
+          bccCount: rawBccCount,
         },
         isChannelPost: false,
       });
@@ -2569,18 +2580,22 @@ async function runGatewayInvokeInner(
 
       // Auth link allowed: create approval with masked summary and always_human.
       // SECURITY: oobCode/apiKey values are NEVER included in summary.
+      // M2: Set requesterMemberId for self-approval prevention and required_approver_kind
+      // for APPROVER_AUTHORITY (owner or designated admin only).
       if (authLinkPolicy.action === "needs_approval") {
         const recipientEmail = toInfo.sources[0] || "不明";
         const mode = authLinkPolicy.links[0]?.mode || "resetPassword";
         const authLinkSummary = buildAuthActionLinkApprovalSummary(recipientEmail, mode);
         const authLinkArtifactLines = buildAuthActionLinkArtifactLines(recipientEmail, authLinkPolicy.links);
         const authLinkTitle = `承認依頼: 認証リンク送信（${purpose}）`;
+        // M3: Mask oobCode/apiKey values before storing in snapshot - SECURITY requirement
+        const sanitizedBody = maskAuthActionLinkSecretsInBody(body, authLinkPolicy.links);
 
         try {
           const created = await createApproval({
             orgId,
             employeeId,
-            credentialId: input.credentialId || employee.credentialId,
+            credentialId: input.credentialId || employee.credentialId || "",
             title: authLinkTitle,
             purpose,
             summary: authLinkSummary,
@@ -2588,6 +2603,8 @@ async function runGatewayInvokeInner(
             tool,
             jobId,
             parentApprovalId: parentApprovalId || null,
+            // M2: Explicit approver authority for auth action links (owner or designated admin only)
+            requiredApproverKind: "owner_or_designated_admin",
             metadata: {
               artifact: {
                 lines: authLinkArtifactLines,
@@ -2598,13 +2615,18 @@ async function runGatewayInvokeInner(
                 tool,
                 purpose,
                 jobId,
-                args: body.args || {},
-                conversation: body.conversation as ConversationContext | null | undefined,
+                body: sanitizedBody,
               }),
               always_human: true,
               authActionLink: true,
               managerId: managerId || undefined,
               mailSendPin: body ? buildMailSendPin(body) : undefined,
+              // M1: Store suspected secrets in metadata for review
+              ...(secretDetection.ok && secretDetection.suspected?.length
+                ? { suspected: secretDetection.suspected }
+                : {}),
+              // M2: Self-approval prevention - set requesterMemberId to employeeId
+              requesterMemberId: employeeId,
             },
           });
 
@@ -2625,11 +2647,13 @@ async function runGatewayInvokeInner(
             }]
           );
 
+          // L: Return standard needs_approval code with auth action link reason in separate field
           return jsonResult(
             {
               ok: false,
-              code: "auth_action_link_needs_approval",
-              error: "auth_action_link_needs_approval",
+              code: "needs_approval",
+              error: "needs_approval",
+              authActionLinkReason: "auth_action_link_internal",
               message: authLinkSummary,
               needs_approval: true,
               approvalId: created.approval.id,
@@ -2657,8 +2681,9 @@ async function runGatewayInvokeInner(
           return jsonResult(
             {
               ok: false,
-              code: "auth_action_link_needs_approval",
-              error: "auth_action_link_needs_approval",
+              code: "needs_approval",
+              error: "needs_approval",
+              authActionLinkReason: "auth_action_link_internal",
               message: authLinkSummary,
               needs_approval: true,
               approvalCreateError: errMsg,

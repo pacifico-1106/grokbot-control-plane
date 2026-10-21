@@ -98,6 +98,12 @@ export function evaluateAuthActionLinkPolicy(
     return blocked("channel_post");
   }
 
+  // L: Check CC/BCC FIRST before audience - malformed CC/BCC should return
+  // has_cc_or_bcc rather than external_recipient caused by invalid addresses
+  if (input.recipients.ccCount > 0 || input.recipients.bccCount > 0) {
+    return blocked("has_cc_or_bcc");
+  }
+
   if (input.audience.destinationMissing) {
     return blocked("audience_unknown");
   }
@@ -108,10 +114,6 @@ export function evaluateAuthActionLinkPolicy(
 
   if (input.recipients.toCount !== 1) {
     return blocked("multiple_recipients");
-  }
-
-  if (input.recipients.ccCount > 0 || input.recipients.bccCount > 0) {
-    return blocked("has_cc_or_bcc");
   }
 
   return {
@@ -175,4 +177,54 @@ export function buildAuthActionLinkArtifactLines(
     lines.push(`  - ${AUTH_MODE_LABEL_JA[link.mode]}（oobCode: [masked], apiKey: [masked]）`);
   }
   return lines;
+}
+
+/**
+ * Mask oobCode and apiKey values in the request body for auth action link approvals.
+ * 
+ * SECURITY: The approval snapshot must NEVER contain oobCode or apiKey values.
+ * This function replaces those values with [REDACTED] in the args.body field.
+ * 
+ * Note: DetectedAuthActionLink intentionally does NOT expose the actual secret values.
+ * We re-extract them here from the body text to mask them.
+ */
+export function maskAuthActionLinkSecretsInBody<T extends { args?: Record<string, unknown> }>(
+  body: T,
+  links: DetectedAuthActionLink[]
+): T {
+  if (!body.args || typeof body.args.body !== "string" || links.length === 0) {
+    return body;
+  }
+
+  let maskedBody = body.args.body;
+  
+  // Extract and mask oobCode and apiKey values from Firebase auth action link URLs
+  // Pattern: https://*.firebaseapp.com/__/auth/action?mode=...&oobCode=VALUE&apiKey=VALUE
+  const urlPattern = /https?:\/\/[A-Za-z0-9.-]+\/__\/auth\/action\?[^\s"'<>]*/gi;
+  const matches = maskedBody.matchAll(urlPattern);
+  
+  for (const match of matches) {
+    try {
+      const url = new URL(match[0]);
+      const oobCode = url.searchParams.get("oobCode");
+      const apiKey = url.searchParams.get("apiKey");
+      
+      if (oobCode) {
+        maskedBody = maskedBody.split(oobCode).join("[REDACTED]");
+      }
+      if (apiKey) {
+        maskedBody = maskedBody.split(apiKey).join("[REDACTED]");
+      }
+    } catch {
+      // Invalid URL, skip
+    }
+  }
+
+  return {
+    ...body,
+    args: {
+      ...body.args,
+      body: maskedBody,
+    },
+  };
 }

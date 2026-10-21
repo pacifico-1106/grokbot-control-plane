@@ -238,6 +238,7 @@ export const AUDIT_ACTION_LABELS_JA: Record<AuditAction, string> = {
   "gateway.conversation_org_mismatch": "会話の組織が一致せず",
   "gateway.conversation_channel_mismatch": "会話のチャネルが一致せず",
   "gateway.session_org_mismatch": "セッションの組織が一致せず",
+  "gateway.auth_action_link_blocked": "認証リンクをブロック",
   "billing.updated": "請求情報を更新",
   "email.sent": "メールを送信",
   "gateway.link_changed": "Gateway連携を変更",

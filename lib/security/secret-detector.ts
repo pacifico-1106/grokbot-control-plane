@@ -63,6 +63,8 @@ export type SecretScanContext = {
   hasAwsAccessKeyId?: boolean;
   /** Field path of the value (its key names count as AWS keyword context). */
   fieldPath?: string;
+  /** Organization ID for org-scoped feature checks (H1: fail-closed when absent). */
+  orgId?: string | null;
 };
 
 export type SecretPattern = {
@@ -303,9 +305,9 @@ function urlHostPathSpans(text: string): Array<[number, number]> {
 function detectAwsSecretKey(
   value: string,
   ctx: SecretScanContext
-): { kind: 'block' | 'suspect'; length: number } | null {
+): { kind: 'block' | 'suspect'; length: number; index?: number } | null {
   const text = decodeKeyChars(value);
-  let suspect: { kind: 'suspect'; length: number } | null = null;
+  let suspect: { kind: 'suspect'; length: number; index: number } | null = null;
   const fieldPathText = ctx.fieldPath ?? '';
   const pathHasKeyword = AWS_SECRET_KEYWORD.test(fieldPathText) || AWS_SECRET_CONTEXT_WEAK.test(fieldPathText);
   const idInPayload = ctx.hasAwsAccessKeyId === true || AWS_ACCESS_KEY_ID.test(text);
@@ -318,13 +320,13 @@ function detectAwsSecretKey(
     const before = text.slice(Math.max(0, start - AWS_KEYWORD_WINDOW_BEFORE), start);
     const after = text.slice(end, end + AWS_KEYWORD_WINDOW_AFTER);
     if (idInPayload || pathHasKeyword || AWS_SECRET_KEYWORD.test(before) || AWS_SECRET_KEYWORD.test(after)) {
-      return { kind: 'block', length: candidate.length };
+      return { kind: 'block', length: candidate.length, index: start };
     }
     if (AWS_SECRET_CONTEXT_WEAK.test(before) || AWS_SECRET_CONTEXT_WEAK.test(after)) {
       urlSpans ??= urlHostPathSpans(text);
-      if (!urlSpans.some(([a, b]) => a <= start && end <= b)) return { kind: 'block', length: candidate.length };
+      if (!urlSpans.some(([a, b]) => a <= start && end <= b)) return { kind: 'block', length: candidate.length, index: start };
     }
-    suspect = { kind: 'suspect', length: candidate.length };
+    suspect = { kind: 'suspect', length: candidate.length, index: start };
   }
   return suspect;
 }
@@ -482,12 +484,13 @@ export function detectSecretInString(value: string, ctx: SecretScanContext = {})
     };
   }
   if (isAllowlisted(value)) return { ok: true };
-  const raw = scanString(value, ctx, fieldPath, true);
+  const ctxWithPath = { ...ctx, fieldPath };
+  const raw = scanString(value, ctxWithPath, fieldPath, true);
   if (!raw.ok) return raw;
   let suspected = raw.suspected ?? [];
   const normalized = normalizeForScan(value);
   if (normalized !== value) {
-    const decoded = scanString(normalized, ctx, fieldPath, false);
+    const decoded = scanString(normalized, ctxWithPath, fieldPath, false);
     if (!decoded.ok) return decoded;
     if (suspected.length === 0 && decoded.suspected) suspected = decoded.suspected;
   }
@@ -506,7 +509,21 @@ function scanString(value: string, ctx: SecretScanContext, fieldPath: string, fu
     if (name === 'aws_secret_key') {
       const aws = detectAwsSecretKey(value, ctx);
       if (aws?.kind === 'block') return blockedResult(name, fieldPath, aws.length);
-      if (aws?.kind === 'suspect') suspected.push({ pattern: name, fieldPath, length: aws.length });
+      if (aws?.kind === 'suspect') {
+        authLinks ??= parseFirebaseAuthActionLinks(value, ctx.orgId);
+        const matchStart = aws.index ?? 0;
+        const matchEnd = matchStart + aws.length;
+        const isExactApiKeySpan = authLinks.some(
+          (link) =>
+            link.apiKeyValue !== null &&
+            link.apiKeyValue === value.slice(matchStart, matchEnd) &&
+            matchStart >= link.start &&
+            matchEnd <= link.end
+        );
+        if (!isExactApiKeySpan) {
+          suspected.push({ pattern: name, fieldPath, length: aws.length });
+        }
+      }
       continue;
     }
     if (name === 'jwt_token') {
@@ -514,8 +531,8 @@ function scanString(value: string, ctx: SecretScanContext, fieldPath: string, fu
       if (jwtLength !== null) return blockedResult(name, fieldPath, jwtLength);
       continue;
     }
-    if (name === 'google_api_key' && isSecretAuthActionLinkEnabled()) {
-      authLinks ??= parseFirebaseAuthActionLinks(value);
+    if (name === 'google_api_key' && isSecretAuthActionLinkEnabledForOrg(ctx.orgId)) {
+      authLinks ??= parseFirebaseAuthActionLinks(value, ctx.orgId);
       const globalPattern = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
       for (const match of value.matchAll(globalPattern)) {
         const matched = match[0];
@@ -533,20 +550,20 @@ function scanString(value: string, ctx: SecretScanContext, fieldPath: string, fu
       }
       continue;
     }
-    if (name === 'api_key_inline' && isSecretAuthActionLinkEnabled()) {
-      authLinks ??= parseFirebaseAuthActionLinks(value);
-      if (authLinks.length > 0) {
-        const match = value.match(pattern);
-        if (match) {
-          const matchStart = match.index ?? 0;
-          const matchEnd = matchStart + match[0].length;
-          const insideAuthLink = authLinks.some(
-            (link) => matchStart >= link.start && matchEnd <= link.end
-          );
-          if (insideAuthLink) continue;
+    if (name === 'api_key_inline' && isSecretAuthActionLinkEnabledForOrg(ctx.orgId)) {
+      authLinks ??= parseFirebaseAuthActionLinks(value, ctx.orgId);
+      const globalPattern = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
+      for (const match of value.matchAll(globalPattern)) {
+        const matchStart = match.index ?? 0;
+        const matchEnd = matchStart + match[0].length;
+        const insideAuthLink = authLinks.some(
+          (link) => matchStart >= link.start && matchEnd <= link.end
+        );
+        if (!insideAuthLink) {
           return blockedResult(name, fieldPath, match[0].length);
         }
       }
+      if (authLinks.length > 0) continue;
     }
     const isGeneric = name === 'base64_long_secret' || name === 'hex_long_secret';
     if (isGeneric && (bareUrl || !full)) continue;
@@ -648,21 +665,22 @@ export function checkPayloadScanLimits(
   };
 }
 
-export function detectSecretInPayload(payload: unknown): SecretDetectionResult {
+export function detectSecretInPayload(payload: unknown, ctx?: SecretScanContext): SecretDetectionResult {
   const tooLarge = checkPayloadScanLimits(payload);
   if (tooLarge) return tooLarge;
   const strings = extractAllStrings(payload);
   const idInPayload = strings.some(({ value }) => hasAwsAccessKeyId(value));
   const suspected: SecretFinding[] = [];
   const authActionLinks: DetectedAuthActionLink[] = [];
+  const orgId = ctx?.orgId;
   
   for (const { path, value } of strings) {
-    const result = detectSecretInString(value, { hasAwsAccessKeyId: idInPayload, fieldPath: path });
+    const result = detectSecretInString(value, { hasAwsAccessKeyId: idInPayload, fieldPath: path, orgId });
     if (!result.ok) return result;
     if (result.suspected) suspected.push(...result.suspected);
     
-    if (isSecretAuthActionLinkEnabled()) {
-      const links = parseFirebaseAuthActionLinks(value);
+    if (isSecretAuthActionLinkEnabledForOrg(orgId)) {
+      const links = parseFirebaseAuthActionLinks(value, orgId);
       for (const link of links) {
         authActionLinks.push({
           mode: link.mode,
@@ -804,7 +822,7 @@ export const SECRET_DETECTOR_REGEXES_FOR_TEST: ReadonlyArray<{ name: string; pat
 // that should be treated differently from standalone API keys.
 // ---------------------------------------------------------------------------
 
-import { isSecretAuthActionLinkEnabled } from "@/lib/feature-flags";
+import { isSecretAuthActionLinkEnabled, isSecretAuthActionLinkEnabledForOrg } from "@/lib/feature-flags";
 
 /** Valid Firebase auth action modes. */
 const FIREBASE_AUTH_MODES = ["resetPassword", "verifyEmail", "signIn", "recoverEmail"] as const;
@@ -841,9 +859,12 @@ const FIREBASE_AUTH_URL_PATTERN = /https?:\/\/[A-Za-z0-9.-]+\/__\/auth\/action\?
  * 
  * SECURITY: apiKeyValue is extracted for the exception check but MUST NOT be
  * logged, returned in errors, or included in audit records.
+ * 
+ * H1: When orgId is provided, uses org-scoped flag check. When orgId is null/undefined,
+ * returns empty (fail-closed) to prevent exemption bypass.
  */
-export function parseFirebaseAuthActionLinks(text: string): FirebaseAuthActionLink[] {
-  if (!isSecretAuthActionLinkEnabled()) return [];
+export function parseFirebaseAuthActionLinks(text: string, orgId?: string | null): FirebaseAuthActionLink[] {
+  if (!isSecretAuthActionLinkEnabledForOrg(orgId)) return [];
   
   const results: FirebaseAuthActionLink[] = [];
   
@@ -893,8 +914,8 @@ export type AuthActionLinkDetectionResult = {
  * 
  * SECURITY: Result never contains oobCode or apiKey values.
  */
-export function detectAuthActionLink(value: string): AuthActionLinkDetectionResult {
-  const links = parseFirebaseAuthActionLinks(value);
+export function detectAuthActionLink(value: string, orgId?: string | null): AuthActionLinkDetectionResult {
+  const links = parseFirebaseAuthActionLinks(value, orgId);
   if (links.length === 0) return { detected: false };
   return {
     detected: true,

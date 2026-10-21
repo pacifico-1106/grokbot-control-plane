@@ -53,6 +53,12 @@ export type CreateApprovalInput = {
   jobId?: string | null;
   parentApprovalId?: string | null;
   metadata?: Record<string, unknown>;
+  /**
+   * M2: Explicit required approver kind for APPROVER_AUTHORITY enforcement.
+   * When set, overrides the automatic detection from tool/metadata.
+   * Use for special cases like auth action links on non-target tools.
+   */
+  requiredApproverKind?: "owner_or_designated_admin" | "owner" | null;
 };
 
 export type CreateApprovalResult = {
@@ -224,11 +230,14 @@ export async function createApproval(
   }
   const revisionCount = parent?.revisionCount ?? 0;
   // PR-D: required approver kind (null when APPROVER_AUTHORITY_ENABLED is OFF or not a target).
-  const approverRequirement = await approverRequirementForFiling({
-    orgId: input.orgId,
-    tool: input.tool,
-    metadata: input.metadata ?? null,
-  });
+  // M2: Allow explicit override for special cases like auth action links.
+  const approverRequirement = input.requiredApproverKind
+    ? { kind: input.requiredApproverKind, reasons: ["auth_action_link" as const], requiredApprovals: 1 }
+    : await approverRequirementForFiling({
+        orgId: input.orgId,
+        tool: input.tool,
+        metadata: input.metadata ?? null,
+      });
 
   if (isDemoMode()) {
     const demoInput: CreateRuntimeApprovalInput = {
