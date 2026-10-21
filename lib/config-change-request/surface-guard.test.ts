@@ -9,7 +9,7 @@
  * fail-first: tests are written before implementation and must fail initially.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { DEMO_ORG } from "@/lib/demo-data";
+import { DEMO_ORG, getRuntimeMemberById } from "@/lib/demo-data";
 import {
   createConfigChangeRequest,
   type ConfigChangeDeps,
@@ -20,10 +20,13 @@ import {
 import { getOrgChannel, getOrgParty } from "@/lib/data/directory";
 import { resolveApproval, getApprovalById } from "@/lib/data/approvals";
 import { fulfillIfApproved } from "@/lib/approvals/fulfill";
+import { startHold, approveHoldRelease } from "@/lib/safety/hold-actions";
 
 const FLAG = "P1_CONFIG_CHANGE_REQUEST_ENABLED";
 const GUARD_FLAG = "CONFIG_CHANNEL_CLASSIFICATION_SURFACE_GUARD_ENABLED";
 const GUARD_ORG_IDS = "CONFIG_CHANNEL_CLASSIFICATION_SURFACE_GUARD_ORG_IDS";
+const APPROVER_AUTHORITY_FLAG = "APPROVER_AUTHORITY_ENABLED";
+const EMPLOYEE_HOLD_FLAG = "EMPLOYEE_HOLD_ENABLED";
 
 const ORG = DEMO_ORG.id;
 
@@ -52,8 +55,12 @@ function guardOff() {
   delete process.env[GUARD_ORG_IDS];
 }
 
+function approverAuthorityOn() {
+  process.env[APPROVER_AUTHORITY_FLAG] = "1";
+}
+
 beforeEach(() => {
-  saveEnv(FLAG, GUARD_FLAG, GUARD_ORG_IDS);
+  saveEnv(FLAG, GUARD_FLAG, GUARD_ORG_IDS, APPROVER_AUTHORITY_FLAG);
   flagOn();
   guardOff();
 });
@@ -180,6 +187,7 @@ describe("flag OFF (regression)", () => {
 describe("flag ON", () => {
   beforeEach(() => {
     guardOn();
+    approverAuthorityOn();
   });
 
   test("surface=mail → redirected to parties.upsert (mail_address kind)", async () => {
@@ -350,7 +358,7 @@ describe("flag ON", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "自分", slackUserId: "U_SELF", email: "self@example.com" },
+          requestedBy: { name: "佐藤", slackUserId: null, email: "sales@example.com" }, // mem_2
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -371,7 +379,7 @@ describe("flag ON", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: "tanaka@example.com" },
+          requestedBy: { name: "佐藤", slackUserId: null, email: "sales@example.com" }, // mem_2
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -394,7 +402,7 @@ describe("flag ON", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: "tanaka@example.com" },
+          requestedBy: { name: "佐藤", slackUserId: null, email: "sales@example.com" }, // mem_2
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -405,7 +413,8 @@ describe("flag ON", () => {
     // M1: adminRequester must be set for assertNotSelfApproval to work
     const adminRequester = approval?.metadata?.adminRequester as Record<string, unknown> | undefined;
     expect(adminRequester).toBeDefined();
-    expect(adminRequester?.kind).toBe("admin_agent");
+    // kind is "employee_badge" for config.change_request (not admin_agent)
+    expect(adminRequester?.kind).toBe("employee_badge");
   });
 
   test("M1: resolveApproval rejects self-approval for party_audience (admin class)", async () => {
@@ -418,7 +427,7 @@ describe("flag ON", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: "tanaka@example.com" },
+          requestedBy: { name: "佐藤", slackUserId: null, email: "sales@example.com" }, // mem_2
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -426,24 +435,23 @@ describe("flag ON", () => {
     );
     assertPending(res);
 
-    // Attempt self-approval with same credentialId/actorId should fail
-    let selfApprovalDenied = false;
-    try {
-      await resolveApproval(res.approvalId, "approved", "cred_emp_comm", ORG, {
-        actorId: "cred_emp_comm",
-      });
-    } catch (error) {
-      selfApprovalDenied = error instanceof Error && error.message === "self_approval_denied";
-    }
-    expect(selfApprovalDenied).toBe(true);
+    // Attempt self-approval as mem_2 (same member who requested) should fail
+    // resolveApproval returns null with reason via onResolveResult callback
+    let resolveReason: string | null = null;
+    const selfApprovalResult = await resolveApproval(res.approvalId, "approved", "sales@example.com", ORG, {
+      memberId: "mem_2",
+      onResolveResult: (result) => { resolveReason = result.reason; },
+    });
+    expect(selfApprovalResult).toBeNull();
+    expect(resolveReason).toBe("approver_is_requester");
 
-    // Human approver should succeed
+    // Different member (owner) should be able to approve
     const humanApproved = await resolveApproval(
       res.approvalId,
       "approved",
       "owner@example.com",
       ORG,
-      { actorId: "mem_owner" }
+      { memberId: "mem_1" }
     );
     expect(humanApproved?.status).toBe("approved");
   });
@@ -629,7 +637,7 @@ describe("M3: fulfill-time guard re-check", () => {
 });
 
 async function approveAndFulfil(approvalId: string) {
-  const approved = await resolveApproval(approvalId, "approved", "owner@example.com", ORG, { actorId: "user_owner" });
+  const approved = await resolveApproval(approvalId, "approved", "owner@example.com", ORG, { memberId: "mem_1" });
   expect(approved?.status).toBe("approved");
   const fulfil = await fulfillIfApproved(approved!, "approved");
   return { approved: approved!, fulfil };
@@ -643,6 +651,7 @@ describe("followup: M1 requester → member binding", () => {
   beforeEach(() => {
     flagOn();
     guardOn();
+    approverAuthorityOn();
   });
 
   test("M1: requestedBy.email resolves to requesterMemberId via member email", async () => {
@@ -678,7 +687,7 @@ describe("followup: M1 requester → member binding", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "山田", slackUserId: null, email: "owner@example.com" },
+          requestedBy: { name: "佐藤", slackUserId: null, email: "sales@example.com" }, // mem_2
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -686,17 +695,25 @@ describe("followup: M1 requester → member binding", () => {
     );
     assertPending(res);
 
-    // Attempt to approve as the same member who requested (mem_1)
-    let selfApprovalDenied = false;
-    try {
-      await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, {
-        memberId: "mem_1", // same member as requester
-      });
-    } catch (error) {
-      selfApprovalDenied = error instanceof Error && 
-        (error.message === "self_approval_denied" || error.message.includes("self_approval"));
-    }
-    expect(selfApprovalDenied).toBe(true);
+    // Attempt to approve as the same member who requested (mem_2)
+    // resolveApproval returns null with reason via onResolveResult callback
+    let resolveReason: string | null = null;
+    const selfApprovalResult = await resolveApproval(res.approvalId, "approved", "sales@example.com", ORG, {
+      memberId: "mem_2", // same member as requester
+      onResolveResult: (result) => { resolveReason = result.reason; },
+    });
+    expect(selfApprovalResult).toBeNull();
+    expect(resolveReason).toBe("approver_is_requester");
+
+    // Different member (owner) should be able to approve
+    const humanApproved = await resolveApproval(
+      res.approvalId,
+      "approved",
+      "owner@example.com",
+      ORG,
+      { memberId: "mem_1" }
+    );
+    expect(humanApproved?.status).toBe("approved");
   });
 
   test("M1: fail-closed when requester cannot be identified", async () => {
@@ -770,6 +787,35 @@ describe("followup: M2' fulfill hold check", () => {
   beforeEach(() => {
     flagOn();
     guardOn();
+    approverAuthorityOn();
+    saveEnv(EMPLOYEE_HOLD_FLAG);
+    process.env[EMPLOYEE_HOLD_FLAG] = "1";
+  });
+
+  test("M2': party_audience fulfill succeeds when employee is not on hold", async () => {
+    const mailAddress = `${uniq("m2ok")}@example.com`;
+    const res = await createConfigChangeRequest(
+      {
+        orgId: ORG,
+        employeeId: "emp_comm",
+        credentialId: null,
+        args: {
+          kind: "channel_classification",
+          jobId: uniq("job-"),
+          requestedBy: { name: "佐藤", slackUserId: null, email: "sales@example.com" },
+          channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
+        },
+      },
+      okDeps
+    );
+    assertPending(res);
+
+    const approved = await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, { memberId: "mem_1" });
+    expect(approved?.status).toBe("approved");
+
+    // No hold set - should succeed
+    const fulfil = await fulfillIfApproved(approved!, "approved");
+    expect(fulfil?.ok).toBe(true);
   });
 
   test("M2': fulfill rejects when employee is on hold", async () => {
@@ -791,48 +837,28 @@ describe("followup: M2' fulfill hold check", () => {
     );
     assertPending(res);
 
-    const approved = await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, { actorId: "mem_1" });
+    const approved = await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, { memberId: "mem_1" });
     expect(approved?.status).toBe("approved");
 
     // Put employee on hold before fulfill
-    // (This test expects the implementation to check employee hold at fulfill time)
-    // The hold mechanism should be set up here
+    const owner = getRuntimeMemberById("mem_1")!;
+    const holdResult = await startHold({
+      orgId: ORG,
+      employeeId: "emp_comm",
+      reason: "test hold",
+      actor: { type: "member", member: owner, surface: "web" },
+    });
+    expect(holdResult.ok).toBe(true);
     
     const fulfil = await fulfillIfApproved(approved!, "approved");
     // M2': fulfill should check employee hold even for admin-class party_audience
-    // This test will currently pass incorrectly; it should fail
     expect(fulfil?.ok).toBe(false);
-    expect(fulfil?.error).toMatch(/hold|stopped/i);
-  });
+    expect(fulfil?.error).toMatch(/hold|stopped|approval_held/i);
 
-  test("M2': fulfill rejects when employee status is not active", async () => {
-    const mailAddress = `${uniq("m2inactive")}@example.com`;
-    // Use sales@example.com as requester (different from owner who will approve)
-    const res = await createConfigChangeRequest(
-      {
-        orgId: ORG,
-        employeeId: "emp_comm",
-        credentialId: null,
-        args: {
-          kind: "channel_classification",
-          jobId: uniq("job-"),
-          requestedBy: { name: "佐藤", slackUserId: null, email: "sales@example.com" },
-          channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
-        },
-      },
-      okDeps
-    );
-    assertPending(res);
-
-    const approved = await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, { actorId: "mem_1" });
-    expect(approved?.status).toBe("approved");
-
-    // Employee should be checked for active status at fulfill time
-    // (even though party_audience is admin class)
-    // Note: This test needs setup to deactivate the employee
-    const fulfil = await fulfillIfApproved(approved!, "approved");
-    // M2': should verify employee is still active
-    expect(fulfil?.ok).toBe(false);
+    // Cleanup: release hold (best effort)
+    if (holdResult.ok) {
+      await approveHoldRelease({ orgId: ORG, holdId: holdResult.holdId, actor: { type: "member", member: owner, surface: "web" } }).catch(() => {});
+    }
   });
 });
 

@@ -64,7 +64,12 @@ import type { Audience, OrgPartyKind } from "@/lib/types";
 import { validatePartiesUpsertArgs } from "@/lib/channel-classify/core";
 import { listMembers, normalizeMemberEmail } from "@/lib/data/members";
 import { listVoterBindings } from "@/lib/approval-workflow/voter-binding";
+import { demoUpdateApproval } from "@/lib/data/demo-approvals-store";
+import { isDemoMode } from "@/lib/mode";
+import { createSupabaseAdminClient } from "@/lib/supabase";
+import { checkOperable } from "@/lib/safety/hold";
 import type { ConfigChangeRequester } from "./core";
+import type { RequiredApproverKind } from "@/lib/approver-authority/targets";
 
 export type ApproverResolution =
   | { ok: true; surface: "slack_dm" | "slack" | "telegram" | "line"; channelId: string | null }
@@ -647,6 +652,25 @@ export async function createConfigChangeRequest(
     },
   });
 
+  // M1: party_audience requires owner_or_designated_admin (APPROVER_AUTHORITY)
+  if (isPartyAudience) {
+    const requiredKind: RequiredApproverKind = "owner_or_designated_admin";
+    if (isDemoMode()) {
+      await demoUpdateApproval(created.approval.id, { requiredApproverKind: requiredKind });
+      created.approval.requiredApproverKind = requiredKind;
+    } else {
+      const admin = createSupabaseAdminClient();
+      if (admin) {
+        await admin
+          .from("approval_requests")
+          .update({ required_approver_kind: requiredKind })
+          .eq("id", created.approval.id)
+          .eq("org_id", input.orgId);
+        created.approval.requiredApproverKind = requiredKind;
+      }
+    }
+  }
+
   await appendAuditEvent({
     orgId: input.orgId,
     employeeId: employee.id,
@@ -719,6 +743,13 @@ async function applyConfigChange(approval: ApprovalRequest): Promise<ConfigChang
   if (meta.employeeId !== approval.employeeId) return fail("approval_target_mismatch");
   const employee = await getEmployee(approval.employeeId, approval.orgId);
   if (!employee || employee.status !== "active") return fail("employee_not_active");
+
+  // M2': party_audience must check employee hold even for admin-class tickets
+  const isPartyAudienceProposal = meta.proposal.kind === "party_audience";
+  if (isPartyAudienceProposal) {
+    const holdResult = await checkOperable({ orgId: approval.orgId, employeeId: approval.employeeId, phase: "approval_execution" });
+    if (!holdResult.ok) return fail(holdResult.code === "employee_on_hold" ? "employee_on_hold" : "hold_state_unavailable");
+  }
 
   const proposal = meta.proposal;
 
