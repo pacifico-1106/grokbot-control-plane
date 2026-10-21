@@ -76,15 +76,19 @@ export async function resolveApprovalWithWorkflow(
   // screen may reject it, never approve it. HOLD_RELEASE_SURFACES is the one switch.
   if (status === "approved") {
     const ticket = await getApprovalById(id, orgId).catch(() => null);
+    const lineApprove =
+      isLineSurfaceApproval({ resolvedBy, externalVoter: opts.externalVoter }) &&
+      isLineWebOnlyHighRiskEnabled(orgId);
+    if (lineApprove && !ticket) {
+      const verdict = lineWebOnlyHighRiskVerdict(null);
+      return { ok: false, approval: null, workflowApplied: false, workflowComplete: false, workflowApproved: false,
+        workflowRejected: false, progress: null, reason: verdict.reason || "line_web_only_unclassified" };
+    }
     if (ticket && isHoldReleaseTicket(ticket)) {
       return { ok: false, approval: null, workflowApplied: false, workflowComplete: false, workflowApproved: false,
         workflowRejected: false, progress: null, reason: "hold_release_web_only" };
     }
-    if (
-      ticket &&
-      isLineSurfaceApproval({ resolvedBy, externalVoter: opts.externalVoter }) &&
-      isLineWebOnlyHighRiskEnabled(orgId)
-    ) {
+    if (ticket && lineApprove) {
       const verdict = lineWebOnlyHighRiskVerdict(ticket);
       if (verdict.refuse) {
         return { ok: false, approval: null, workflowApplied: false, workflowComplete: false, workflowApproved: false,

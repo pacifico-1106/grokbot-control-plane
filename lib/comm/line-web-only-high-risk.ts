@@ -4,6 +4,7 @@
  * Unclassifiable tickets are refused (fail-closed).
  */
 import { isAdminClassApproval } from "@/lib/admin-mcp/audit-class";
+import { isLineWebOnlyHighRiskEnabled } from "@/lib/comm/flags";
 import { isHoldReleaseTicket } from "@/lib/safety/hold-config";
 
 export type LineWebOnlyHighRiskRef = {
@@ -121,13 +122,26 @@ export function approvalTicketPolicyMetadata(input: {
         (input.employeeApprovalPolicy && input.employeeApprovalPolicy.trim()) ||
         (input.toolHint === "auto" || input.toolHint === "risk_based" ? input.toolHint : null);
   const alwaysHuman = approvalPolicy === "always_human" || md.always_human === true;
-  const approvalClass =
-    md.approvalClass === "admin" || md.approvalClass === "business"
-      ? md.approvalClass
-      : isAdminClassApproval({ tool: input.tool, purpose: input.purpose, metadata: md })
-        ? "admin"
-        : "business";
+  const { approvalClass: _ignoredClass, ...safeMd } = md;
+  void _ignoredClass;
+  const approvalClass = isAdminClassApproval({ tool: input.tool, purpose: input.purpose, metadata: safeMd })
+    ? "admin"
+    : "business";
   return { approvalPolicy, employeeAlwaysHuman, approvalClass, always_human: alwaysHuman };
+}
+
+/** L4: the 4 policy keys are written only when the high-risk flag is ON. */
+export function approvalTicketPolicyStamp(
+  orgId: string | null | undefined,
+  input: Parameters<typeof approvalTicketPolicyMetadata>[0]
+): {
+  approvalPolicy?: string | null;
+  employeeAlwaysHuman?: boolean;
+  approvalClass?: "admin" | "business";
+  always_human?: boolean;
+} {
+  if (!isLineWebOnlyHighRiskEnabled(orgId)) return {};
+  return approvalTicketPolicyMetadata(input);
 }
 
 export type LineWebOnlyHighRiskVerdict = {
