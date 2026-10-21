@@ -1359,3 +1359,37 @@ export function isApprovalStatusPublicMinimalEnabledForOrg(
   const list = approvalStatusPublicMinimalOrgIds();
   return list.length === 0 || list.includes(orgId);
 }
+
+/**
+ * MAIL_POLICY_INTERNAL_NOMATCH_APPROVAL_ENABLED (default OFF).
+ *
+ * evaluateForRecipient: audience=internal AND no rule matched AND the first
+ * rule is audience=external → return needs_approval like an empty rule list
+ * instead of borrowing the first (external) rule's draft. A first-rule
+ * reject (attachment forbid / CC forbid / D1 none / etc.) is kept.
+ *
+ * When OFF (default): existing behavior — unmatched internal keeps a stricter
+ * first-rule draft (e.g. default mpr_default_external).
+ *
+ * _ORG_IDS: comma-separated org ids. Empty / unset → apply to every org when
+ * the master flag is ON. Non-empty → only those orgs. Missing orgId stays OFF.
+ */
+export function isMailPolicyInternalNomatchApprovalEnabled(): boolean {
+  return parseFlag(process.env.MAIL_POLICY_INTERNAL_NOMATCH_APPROVAL_ENABLED);
+}
+
+export function mailPolicyInternalNomatchApprovalOrgIds(): string[] {
+  return (process.env.MAIL_POLICY_INTERNAL_NOMATCH_APPROVAL_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isMailPolicyInternalNomatchApprovalEnabledForOrg(
+  orgId: string | null | undefined
+): boolean {
+  if (!isMailPolicyInternalNomatchApprovalEnabled()) return false;
+  if (!orgId) return false;
+  const list = mailPolicyInternalNomatchApprovalOrgIds();
+  return list.length === 0 || list.includes(orgId);
+}

@@ -893,13 +893,37 @@ async function fulfillMailSend(
     }).catch(() => undefined);
     return fulfillment;
   }
-  const args = snapshot.args;
+  return deliverApprovedMailFromArgs({
+    approval,
+    args: snapshot.args,
+    conversation: snapshot.conversation,
+    jobId: snapshot.jobId,
+    tool: snapshot.tool,
+  });
+}
 
+/**
+ * Shared Gmail / stub send for approved mail.send.
+ * MAIL_SEND_GMAIL_LIVE OFF → delivery:"stub". ON → users.messages.send.
+ * Bodies / oobCode / apiKey are never logged.
+ */
+export async function deliverApprovedMailFromArgs(input: {
+  approval: ApprovalRequest;
+  args: Record<string, unknown>;
+  conversation?: InvokeSnapshot["conversation"];
+  jobId?: string | null;
+  tool?: string;
+}): Promise<ApprovalFulfillment> {
+  const { approval, args } = input;
+  const conversation = input.conversation;
+  const tool = input.tool || approval.tool || "mail.send";
+  const jobId = input.jobId || approval.jobId;
+  const at = new Date().toISOString();
   const to = (
     typeof args.to === "string" ? args.to :
     typeof args.recipient === "string" ? args.recipient :
     typeof args.email === "string" ? args.email :
-    snapshot.conversation?.email ?? ""
+    conversation?.email ?? ""
   );
 
   const subject = (
@@ -938,8 +962,8 @@ async function fulfillMailSend(
         summary: "承認済みメール送信を添付の不一致で停止（未送信）",
         metadata: {
           approvalId: approval.id,
-          tool: snapshot.tool,
-          jobId: snapshot.jobId,
+          tool,
+          jobId,
           code: bytes.code,
           phase: "approval.fulfill",
           attachmentCount: approved.length,
@@ -962,14 +986,14 @@ async function fulfillMailSend(
     await persistFulfillment(approval, fulfillment);
     return fulfillment;
   }
-  const threading = parseMailThreading(args, snapshot.conversation);
+  const threading = parseMailThreading(args, conversation);
   if (!threading.ok) {
     const fulfillment: ApprovalFulfillment = { ok: false, error: threading.code, at };
     await persistFulfillment(approval, fulfillment);
     return fulfillment;
   }
   const gmail =
-    mailProviderIsGmail(args, snapshot.conversation) || Boolean(threading.threading.threadId);
+    mailProviderIsGmail(args, conversation) || Boolean(threading.threading.threadId);
   const headers = gmail ? gmailReplyHeaders(threading.threading) : {};
   const parts = mailAttachmentMimeParts(opened);
 
@@ -1052,8 +1076,8 @@ async function fulfillMailSend(
       : "承認済みメール送信（スタブ実行・MAIL_SEND_GMAIL_LIVE=OFF）",
     metadata: {
       approvalId: approval.id,
-      tool: snapshot.tool,
-      jobId: snapshot.jobId,
+      tool,
+      jobId,
       delivery: fulfillment.ok ? fulfillment.delivery : undefined,
       code: fulfillment.error,
       phase: "approval.fulfill",

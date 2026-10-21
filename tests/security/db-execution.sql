@@ -5,6 +5,16 @@ insert into public.org_admin_agents(id,org_id,credential_fingerprint,credential_
 values ('00000000-0000-4000-8000-000000000020','00000000-0000-4000-8000-000000000001','fixture-hash',1,'linked','fixture-agent');
 insert into public.approval_requests(id,org_id,purpose,summary,risk,status,metadata)
 select ('00000000-0000-4000-8000-0000000000' || i::text)::uuid,'00000000-0000-4000-8000-000000000001','admin.policy','fixture','low','approved','{}'::jsonb from generate_series(10,14) i;
+insert into public.approval_requests(id,org_id,purpose,summary,risk,status,metadata)
+values (
+  '00000000-0000-4000-8000-000000000015',
+  '00000000-0000-4000-8000-000000000001',
+  'sales.outreach',
+  'auth-link fixture',
+  'high',
+  'approved',
+  '{"authActionLink":true}'::jsonb
+);
 update approval_requests set metadata='{"adminRequester":{"kind":"admin_agent","actorId":"00000000-0000-4000-8000-000000000020","credentialGeneration":1,"grokBotAgentId":"fixture-agent"},"adminFulfillment":{"ok":true,"oneTimeSecret":"fixture-only"},"fulfillment":{"ok":true,"oneTimeSecret":"fixture-only"}}'::jsonb where id='00000000-0000-4000-8000-000000000011';
 
 set role anon;
@@ -13,6 +23,10 @@ select security_test.denied($cmd$select public.claim_approval_execution(gen_rand
 select security_test.denied($cmd$select public.consume_admin_approval_secret(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),1)$cmd$);
 select security_test.denied($cmd$select public.merge_approval_metadata(gen_random_uuid(),gen_random_uuid(),'{}')$cmd$);
 select security_test.denied($cmd$select public.finish_approval_execution(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'failed')$cmd$);
+select security_test.denied($cmd$select public.claim_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
+select security_test.denied($cmd$select public.release_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job')$cmd$);
+select security_test.denied($cmd$select public.consume_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
+select security_test.denied($cmd$select public.mark_auth_link_send_uncertain(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
 reset role;
 set role authenticated;
 select security_test.denied($cmd$insert into public.approval_execution_claims values(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'running',now(),null)$cmd$);
@@ -20,6 +34,10 @@ select security_test.denied($cmd$select public.claim_approval_execution(gen_rand
 select security_test.denied($cmd$select public.consume_admin_approval_secret(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),1)$cmd$);
 select security_test.denied($cmd$select public.merge_approval_metadata(gen_random_uuid(),gen_random_uuid(),'{}')$cmd$);
 select security_test.denied($cmd$select public.finish_approval_execution(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'failed')$cmd$);
+select security_test.denied($cmd$select public.claim_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
+select security_test.denied($cmd$select public.release_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job')$cmd$);
+select security_test.denied($cmd$select public.consume_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
+select security_test.denied($cmd$select public.mark_auth_link_send_uncertain(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
 reset role;
 set role service_role;
 -- Cross-tenant claim and metadata writes have no effect.
@@ -41,4 +59,18 @@ select security_test.check_true(public.claim_approval_execution('00000000-0000-4
 update approval_requests set metadata='{"adminSecretConsumed":true,"fulfillment":{"ok":true}}' where id='00000000-0000-4000-8000-000000000014';
 select security_test.check_true(public.merge_approval_metadata('00000000-0000-4000-8000-000000000014','00000000-0000-4000-8000-000000000001','{"adminSecretConsumed":false,"fulfillment":{"oneTimeSecret":"must-not-return"}}') #>> '{metadata,adminSecretConsumed}'='true');
 select security_test.check_true((select metadata #>> '{fulfillment,oneTimeSecret}' is null from approval_requests where id='00000000-0000-4000-8000-000000000014'));
+-- service_role still cannot claim another org's auth-link ticket (0 rows / not_found).
+select security_test.check_true(
+  public.claim_auth_link_send(
+    '00000000-0000-4000-8000-000000000015',
+    '00000000-0000-4000-8000-000000000002',
+    'job-cross-org',
+    now()
+  ) = 'not_found'
+);
+select security_test.check_true(
+  (select count(*)=0 from approval_requests
+    where id='00000000-0000-4000-8000-000000000015'
+      and coalesce(metadata->'authLinkFulfillment'->>'status','') = 'sending')
+);
 reset role;

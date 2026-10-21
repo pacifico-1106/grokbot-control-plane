@@ -15,6 +15,12 @@
  *   (mail_recipient_invalid).
  * - No matching rule never yields auto: approval is the floor, and the legacy
  *   first-rule outcome is kept only when it is stricter (draft / reject).
+ *   MAIL_POLICY_INTERNAL_NOMATCH_APPROVAL_ENABLED (default OFF, org-scoped):
+ *   when audience=internal, no rule matched, and the first rule is
+ *   audience=external, skip that first-rule draft borrow and return
+ *   needs_approval like an empty rule list. A first-rule reject
+ *   (attachment / CC / D1 / etc.) is kept — stricter only. External
+ *   outcomes are never loosened.
  * - rule.requireHumanFinalSend forces approval on auto.
  *
  * Follow-up (2026-10-03, after #227) — stricter-only:
@@ -36,6 +42,7 @@ import type {
   SealithHandoff,
 } from "@/lib/types";
 import { isEmailDomainInternal } from "@/lib/data/internal-audience-rule";
+import { isMailPolicyInternalNomatchApprovalEnabledForOrg } from "@/lib/feature-flags";
 import { defaultMailPolicy } from "./validate";
 
 export interface EvaluateMailPolicyInput {
@@ -49,6 +56,8 @@ export interface EvaluateMailPolicyInput {
   sealithTransferId?: string | null;
   /** cc / bcc were present in args but not a string / string[] (fail-closed). */
   malformedRecipients?: boolean;
+  /** Org id for MAIL_POLICY_INTERNAL_NOMATCH_APPROVAL_* rollout. */
+  orgId?: string | null;
 }
 
 type ParsedRecipient = { address: string; domain: string };
@@ -405,6 +414,28 @@ function floorToApproval(d: MailPolicyDecision, label: string): MailPolicyDecisi
   };
 }
 
+function emptyRulesDecision(audience: "internal" | "external"): MailPolicyDecision {
+  // Empty rule list: external stays draft (legacy), internal needs approval.
+  return {
+    allowed: true,
+    rejected: false,
+    demotedToDraft: audience === "external",
+    needsApproval: audience !== "external",
+    autoSend: false,
+    sendMode: audience === "external" ? "draft_only" : "needs_approval",
+    audience,
+    attachmentAllowed: true,
+    effectiveAttachmentPolicy: "inherit_d1",
+    auditLabels: [
+      `audience:${audience}`,
+      "rule:no_match",
+      `sendMode:${audience === "external" ? "draft_only" : "needs_approval"}`,
+    ],
+    appliedRules: [],
+    code: audience === "external" ? "mail_send_demoted_to_draft" : undefined,
+  };
+}
+
 function evaluateForRecipient(
   policy: OrgMailPolicy,
   audience: "internal" | "external",
@@ -414,21 +445,22 @@ function evaluateForRecipient(
   const { rule, matched } = selectRule(policy, audience, domain);
 
   if (!rule) {
-    // Empty rule list: external stays draft (legacy), internal needs approval.
-    return {
-      allowed: true,
-      rejected: false,
-      demotedToDraft: audience === "external",
-      needsApproval: audience !== "external",
-      autoSend: false,
-      sendMode: audience === "external" ? "draft_only" : "needs_approval",
-      audience,
-      attachmentAllowed: true,
-      effectiveAttachmentPolicy: "inherit_d1",
-      auditLabels: [`audience:${audience}`, "rule:no_match", `sendMode:${audience === "external" ? "draft_only" : "needs_approval"}`],
-      appliedRules: [],
-      code: audience === "external" ? "mail_send_demoted_to_draft" : undefined,
-    };
+    return emptyRulesDecision(audience);
+  }
+
+  // Flagged: do not borrow an unmatched first external rule's draft for
+  // internal mail. Rejects from that first rule stay reject (stricter only).
+  if (
+    !matched &&
+    audience === "internal" &&
+    rule.audience === "external" &&
+    isMailPolicyInternalNomatchApprovalEnabledForOrg(input.orgId)
+  ) {
+    const borrowed = evaluateRule(policy, rule, audience, domain, input);
+    if (borrowed.rejected) {
+      return { ...borrowed, auditLabels: [...borrowed.auditLabels, "rule:no_match"] };
+    }
+    return emptyRulesDecision("internal");
   }
 
   const decision = evaluateRule(policy, rule, audience, domain, input);
