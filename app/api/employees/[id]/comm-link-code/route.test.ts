@@ -141,4 +141,10 @@ describe("/api/employees/[id]/comm-link-code", () => {
     const src = readFileSync(join(process.cwd(), "lib/mcp/admin-tools.ts"), "utf8");
     expect(src).not.toMatch(/issueLineLinkCode|comm-link-code|conversation_link_code/);
   });
+
+  test("M1: issue/pending do not pass comm-account id as line_approver_link_codes.channel_id", () => {
+    const src = readFileSync(join(process.cwd(), "app/api/employees/[id]/comm-link-code/route.ts"), "utf8");
+    expect(src).not.toMatch(/channelId:\s*found\.account\.id/);
+    expect(src).toMatch(/issueConversationLinkCode|getPendingConversationLinkCode/);
+  });
 });

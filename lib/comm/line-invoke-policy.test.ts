@@ -11,7 +11,7 @@ import {
   lineForceExternalApproval,
 } from "@/lib/comm/line-invoke";
 
-const FLAGS = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED"] as const;
+const FLAGS = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "LINE_CONVERSATION_ORG_IDS", "COMM_ACCOUNTS_ORG_IDS"] as const;
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 afterEach(() => {
   for (const k of FLAGS) {
@@ -116,6 +116,23 @@ describe("lineForceExternalApproval", () => {
       unclassified: true,
       employeeNoApproval: true,
     })).toBe(false);
+  });
+
+  test("L2: allowlist + missing orgId does not enable LINE rewrite", () => {
+    process.env.COMM_ACCOUNTS_ENABLED = "true";
+    process.env.LINE_CONVERSATION_ENABLED = "true";
+    process.env.LINE_CONVERSATION_ORG_IDS = "aaaaaaaa-0000-4000-8000-000000000307";
+    process.env.COMM_ACCOUNTS_ORG_IDS = "aaaaaaaa-0000-4000-8000-000000000307";
+    const input = {
+      surface: "line" as const,
+      audience: "external",
+      egressDecision: "deny" as const,
+      unclassified: true,
+      employeeNoApproval: false,
+    };
+    expect(lineForceExternalApproval(input)).toBe(false);
+    expect(lineForceExternalApproval({ ...input, orgId: "aaaaaaaa-0000-4000-8000-000000000307" })).toBe(true);
+    expect(lineForceExternalApproval({ ...input, orgId: "bbbbbbbb-0000-4000-8000-000000000001" })).toBe(false);
   });
 });
 

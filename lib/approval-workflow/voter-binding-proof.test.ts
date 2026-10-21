@@ -85,4 +85,12 @@ describe("upsertProofVerifiedVoterBinding", () => {
     expect(await getMemberIdFromVoterBinding(ORG, { provider: "line", channelKey: "chn-other", userId: "U-line-1" })).toBeNull();
     expect(await getMemberIdFromVoterBinding(OTHER_ORG, { provider: "line", channelKey: "chn-line", userId: "U-line-1" })).toBeNull();
   });
+
+  test("M4: production path uses a conditional RPC, not get-then-upsert", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("./voter-binding.ts", import.meta.url), "utf8");
+    const fn = src.slice(src.indexOf("export async function upsertProofVerifiedVoterBinding"), src.indexOf("export async function listVoterBindings"));
+    expect(fn).toContain("upsert_proof_verified_voter_binding");
+    expect(fn).not.toMatch(/\.upsert\(/);
+  });
 });

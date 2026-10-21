@@ -94,6 +94,13 @@ describe("conversation token (H2–H4)", () => {
     process.env[KEY] = "short";
     expect(issueConversationToken(base, NOW)).toEqual({ ok: false, reason: "conversation_token_key_missing" });
     expect(verifyConversationToken(t, who, NOW)).toEqual({ ok: false, reason: "conversation_token_key_missing" });
+    delete process.env[KEY];
+    expect(issueConversationToken(base, NOW)).toEqual({ ok: false, reason: "conversation_token_key_missing" });
+    expect(verifyConversationToken(t, who, NOW)).toEqual({ ok: false, reason: "conversation_token_key_missing" });
+    process.env[KEY] = "c".repeat(32);
+    expect(issueConversationToken(base, NOW).ok).toBe(true);
+    delete process.env[PREV];
+    expect(issueConversationToken(base, NOW).ok).toBe(true);
   });
 
   test("bad input refused at issue; PoC is 1:1 only (group refused)", () => {

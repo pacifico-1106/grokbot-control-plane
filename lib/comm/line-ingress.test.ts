@@ -130,6 +130,17 @@ describe("before any event is read", () => {
     expect(await call(nul)).toEqual({ status: 400, body: { ok: false, error: "destination_missing" } });
   });
 
+  test("L3: destination refuse does not write the inbound ledger", async () => {
+    const miss = JSON.stringify({ events: [ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZLEDG1" })] });
+    expect((await call(miss)).status).toBe(400);
+    const mismatch = body([ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZLEDG1" })], "U" + "9".repeat(32));
+    expect((await call(mismatch)).status).toBe(403);
+    const ok = body([ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZLEDG1" })]);
+    expect((await call(ok)).status).toBe(200);
+    expect(dispatched.length).toBe(1);
+    expect(dispatched[0]?.eventKey).toBe("01HZZZZZZZZZZZZZZZZZZLEDG1");
+  });
+
   test("invalid JSON after a valid signature → 400", async () => {
     const raw = "{not json";
     expect((await call(raw)).status).toBe(400);
@@ -137,6 +148,13 @@ describe("before any event is read", () => {
 });
 
 describe("events", () => {
+  test("COMM_CONVERSATION_TOKEN_SECRET missing + flag ON → no wake (fail-closed)", async () => {
+    delete process.env.COMM_CONVERSATION_TOKEN_SECRET;
+    const raw = body([ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZTOK1" })]);
+    expect((await call(raw)).status).toBe(200);
+    expect(dispatched).toEqual([]);
+  });
+
   test("1:1 text → dispatched once; org / employee / account from the account row, not the body", async () => {
     const raw = body([ev({ orgId: "ec000000-0000-4000-8000-0000000000ff", employeeId: "x" })]);
     expect((await call(raw)).status).toBe(200);
@@ -302,6 +320,22 @@ describe("U-06 same OA / U-19 hold: approval postback vs wake", () => {
     expect(dispatched).toEqual([]);
   });
 
+  test("M3: postback uses the LINE approval channel of the same OA, not the first channel", async () => {
+    const { selectSameOaLineApprovalChannel } = await import("@/lib/comm/line-ingress");
+    const other = {
+      id: "ch-other", orgId: ORG, provider: "line" as const, enabled: true, isDefault: true,
+      label: "other", config: { destinationId: "U" + "9".repeat(32) }, webhookRef: "w1",
+      hasCredentials: true, webhookPath: "/x", createdAt: "", updatedAt: "", secrets: {},
+    };
+    const same = {
+      ...other, id: "ch-same", isDefault: false, config: { destinationId: BOT },
+    };
+    expect(selectSameOaLineApprovalChannel(account, [other, same])?.id).toBe("ch-same");
+    expect(selectSameOaLineApprovalChannel(account, [other])).toBeNull();
+    const src = await import("node:fs").then((fs) => fs.readFileSync("lib/comm/line-ingress.ts", "utf8"));
+    expect(src).not.toMatch(/const channel = channels\.find\(\(c\) => c\.provider === "line"\)/);
+  });
+
   test("U-09: org not on LINE_CONVERSATION_ORG_IDS → 404, no dispatch", async () => {
     process.env.LINE_CONVERSATION_ORG_IDS = "aaaaaaaa-0000-4000-8000-000000000307";
     const raw = body([ev()]);
@@ -343,6 +377,26 @@ describe("U-02 unfollow unlink", () => {
     const raw = body([ev({ webhookEventId: "01HZZZZZZZZZZZZZZZZZZUNF2" })]);
     expect((await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, d)).status).toBe(200);
     expect(dispatched).toEqual([]);
+  });
+
+  test("M2: unfollow revoke failure returns 500 and is not consumed", async () => {
+    let attempts = 0;
+    const d = {
+      ...deps(),
+      revokeLink: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("binding_store_down");
+      },
+    };
+    const raw = body([ev({ type: "unfollow", message: undefined, webhookEventId: "01HZZZZZZZZZZZZZZZZZZUNF5" })]);
+    const first = await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(raw), signature: sig(raw) }, d);
+    expect(first.status).toBe(500);
+    expect(first.body).toMatchObject({ ok: false });
+    expect(dispatched).toEqual([]);
+    const again = body([ev({ type: "unfollow", message: undefined, webhookEventId: "01HZZZZZZZZZZZZZZZZZZUNF5", deliveryContext: { isRedelivery: true } })]);
+    const second = await handleLineAccountWebhook({ ref: account.webhookRef, rawBody: new TextEncoder().encode(again), signature: sig(again) }, d);
+    expect(second.status).toBe(200);
+    expect(attempts).toBe(2);
   });
 
   test("re-follow does not restore the link; later text wakes as unlinked (LP-UNF-04)", async () => {
