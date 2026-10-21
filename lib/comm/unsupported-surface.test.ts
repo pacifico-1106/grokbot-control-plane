@@ -153,6 +153,17 @@ describe("H1 verdict: declared non-Slack surface is unsupported (no adapter)", (
   });
 });
 
+describe("L3: flag OFF keeps today's main", () => {
+  test("mail + Slack channel args is not the new H1 409 (today: egress_denied)", async () => {
+    delete process.env.DELIVERY_UNSUPPORTED_SURFACE_ENABLED;
+    recordProviders();
+    const res = await invoke(req("comm.reply", { surface: "mail", email: "yamada@example.com" }, { channel: DM }));
+    expect(res.body.code).toBe("egress_denied");
+    expect(res.body.code).not.toBe("delivery_unsupported_surface");
+    expect(res.httpStatus).toBe(403);
+  });
+});
+
 describe("LP-SND-01: LINE without conversation path is not sent", () => {
   test("flag OFF: comm.reply surface=line → 409 delivery_unsupported_surface, no provider call", async () => {
     delete process.env.DELIVERY_UNSUPPORTED_SURFACE_ENABLED;
