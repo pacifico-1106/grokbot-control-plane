@@ -10,7 +10,8 @@
  * - Applies exactly the stored proposal; Instructions use a base-hash check so
  *   an approver never approves a diff that no longer matches reality.
  */
-import { isConfigChangeRequestEnabled, isInboxRoutingEnabled } from "@/lib/feature-flags";
+import { isConfigChangeRequestEnabled, isInboxRoutingEnabled, isConfigChannelClassificationSurfaceGuardEnabledForOrg } from "@/lib/feature-flags";
+import { ADMIN_AUDIT_CLASS } from "@/lib/admin-mcp/audit-class";
 import { appendAuditEvent } from "@/lib/data/audit";
 import {
   createApproval,
@@ -19,7 +20,7 @@ import {
   updateApprovalMetadata,
 } from "@/lib/data/approvals";
 import { getEmployee } from "@/lib/data/employees";
-import { deleteOrgChannel, getOrgChannel } from "@/lib/data/directory";
+import { deleteOrgChannel, getOrgChannel, getOrgParty, upsertOrgParty } from "@/lib/data/directory";
 import {
   CONFIG_CHANGE_CHANNEL_REMOVE,
   DIRECTORY_REMOVE_AUDIENCE_CHECK_FAILED,
@@ -57,7 +58,10 @@ import {
   type ConfigChangeBefore,
   type ConfigChangeMetadata,
   type ParsedConfigChangeInput,
+  type PartyAudienceProposal,
 } from "./core";
+import type { Audience, OrgPartyKind } from "@/lib/types";
+import { validatePartiesUpsertArgs } from "@/lib/channel-classify/core";
 
 export type ApproverResolution =
   | { ok: true; surface: "slack_dm" | "slack" | "telegram" | "line"; channelId: string | null }
@@ -151,6 +155,15 @@ async function snapshotBefore(
     const text = current?.text ?? "";
     return { kind: "instructions", text, hash: hashText(text), sourceApprovalId: current?.approvalId ?? null };
   }
+  if (proposal.kind === "party_audience") {
+    const party = await getOrgParty(orgId, proposal.partyKind, proposal.identifier);
+    return {
+      kind: "party",
+      exists: Boolean(party),
+      audience: party?.audience ?? null,
+      partyId: party?.id ?? null,
+    };
+  }
   const channel = await getOrgChannel(orgId, proposal.surface, proposal.externalId);
   return {
     kind: "channel",
@@ -217,6 +230,74 @@ async function auditRefusal(
   }).catch(() => null);
 }
 
+const SURFACE_NOT_SUPPORTED_MESSAGE_JA =
+  "この surface のチャネル分類は、resolveAudience で参照されないため効果がありません。" +
+  "メールアドレスの場合は parties.upsert（kind=mail_address）、" +
+  "ドメイン全体の場合は internalAudienceRule.patch を使ってください。";
+
+type SurfaceGuardResult =
+  | { ok: true; proposal: PartyAudienceProposal }
+  | { ok: false; code: "surface_not_supported" | "invalid_identifier"; messageJa: string };
+
+function classificationToAudience(
+  classification: "internal" | "shared_external" | "unknown"
+): Exclude<Audience, "unknown"> {
+  return classification === "internal" ? "internal" : "external";
+}
+
+// M2: simple email format check (@ present, not at start/end, no consecutive dots)
+const BASIC_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function applySurfaceGuard(
+  proposal: { surface: string; externalId: string; classification: "internal" | "shared_external" | "unknown" },
+  employeeId: string
+): SurfaceGuardResult {
+  if (proposal.surface === "mail") {
+    // M2: strip mail: prefix if present
+    let identifier = proposal.externalId;
+    if (identifier.startsWith("mail:")) {
+      identifier = identifier.slice(5);
+    }
+
+    // M2: validate email format first (stricter than parties.upsert for mail_address redirect)
+    if (!BASIC_EMAIL_RE.test(identifier)) {
+      return {
+        ok: false,
+        code: "invalid_identifier",
+        messageJa: "メールアドレスの形式が不正です（@ が必要です）。何も登録していません。",
+      };
+    }
+
+    // M2: apply same validation as parties.upsert
+    const validation = validatePartiesUpsertArgs({
+      kind: "mail_address",
+      identifier,
+      audience: classificationToAudience(proposal.classification),
+    });
+    if (!validation.ok) {
+      return {
+        ok: false,
+        code: "invalid_identifier",
+        messageJa: validation.messageJa,
+      };
+    }
+
+    const partyProposal: PartyAudienceProposal = {
+      kind: "party_audience",
+      partyKind: "mail_address",
+      identifier,
+      audience: classificationToAudience(proposal.classification),
+      originalSurface: "mail",
+    };
+    return { ok: true, proposal: partyProposal };
+  }
+  return {
+    ok: false,
+    code: "surface_not_supported",
+    messageJa: SURFACE_NOT_SUPPORTED_MESSAGE_JA,
+  };
+}
+
 /**
  * Employee-badge entry point. Never mutates config; at most it creates a
  * pending approval and notifies the approver inbox.
@@ -275,7 +356,7 @@ export async function createConfigChangeRequest(
     }
     return { ok: false, code: parsed.code, applied: false, messageJa: parsed.messageJa };
   }
-  const value = parsed.value;
+  let value = parsed.value;
 
   const secret = detectSecretInPayload({
     reason: value.reason,
@@ -297,6 +378,23 @@ export async function createConfigChangeRequest(
     return { ...rejection, ok: false, applied: false, messageJa: rejection.messageJa };
   }
   if (secret.suspected) await auditSecretDetectionSuspected(secretScope, secret.suspected);
+
+  // Surface guard: redirect or reject non-Slack channel_classification when flag is ON.
+  if (
+    value.proposal.kind === "channel_classification" &&
+    value.proposal.surface !== "slack" &&
+    isConfigChannelClassificationSurfaceGuardEnabledForOrg(input.orgId)
+  ) {
+    const surfaceGuardResult = applySurfaceGuard(value.proposal, input.employeeId);
+    if (!surfaceGuardResult.ok) {
+      await auditRefusal(employee, input.credentialId, surfaceGuardResult.code, {
+        surface: value.proposal.surface,
+        externalId: value.proposal.externalId,
+      });
+      return { ...surfaceGuardResult, applied: false };
+    }
+    value = { ...value, proposal: surfaceGuardResult.proposal };
+  }
 
   const before = await snapshotBefore(input.orgId, employee.id, value);
   const proposal = value.proposal;
@@ -364,6 +462,11 @@ export async function createConfigChangeRequest(
       return { ok: true, code: "no_change", applied: false, messageJa: "現在の Instructions と同じ内容です（変更なし）" };
     }
   }
+  if (proposal.kind === "party_audience" && before.kind === "party") {
+    if (before.exists && before.audience === proposal.audience) {
+      return { ok: true, code: "no_change", applied: false, messageJa: "すでに同じ分類です（変更なし）" };
+    }
+  }
 
   const approver = await d.resolveApprover(input.orgId, employee);
   if (!approver.ok) {
@@ -380,12 +483,23 @@ export async function createConfigChangeRequest(
   }
 
   const diff = buildDiff(proposal, before);
-  const summary = buildApproverMessageJa({
+  let summary = buildApproverMessageJa({
     requester: value.requestedBy,
     employeeDisplayName: employee.displayName,
     diffSummaryJa: diff.summaryJa,
     reason: value.reason,
   });
+
+  // M2: warn when classifying external address as internal (reduces approval requirement)
+  if (
+    proposal.kind === "party_audience" &&
+    proposal.audience === "internal" &&
+    (before.kind !== "party" || !before.exists || before.audience !== "internal")
+  ) {
+    summary +=
+      "\n⚠️ 注意: このアドレスは社内として扱われ、外部送信の承認が不要になります。相手が本当に社内か確認してください。";
+  }
+
   const configChange: ConfigChangeMetadata = {
     version: 1,
     kind: proposal.kind,
@@ -400,6 +514,19 @@ export async function createConfigChangeRequest(
     requestedAt: new Date().toISOString(),
   };
 
+  // M1: party_audience uses admin class (same as parties.upsert) for self-approval blocking
+  const isPartyAudience = proposal.kind === "party_audience";
+  const approvalClass = isPartyAudience ? ADMIN_AUDIT_CLASS : CONFIG_CHANGE_APPROVAL_CLASS;
+
+  // M1: adminRequester enables assertNotSelfApproval for admin-class tickets
+  const adminRequester = isPartyAudience
+    ? {
+        kind: "admin_agent" as const,
+        grokBotAgentId: null,
+        actorId: input.credentialId || null,
+      }
+    : undefined;
+
   const created = await createApproval({
     orgId: input.orgId,
     employeeId: employee.id,
@@ -411,10 +538,11 @@ export async function createConfigChangeRequest(
     tool: CONFIG_CHANGE_TOOL,
     jobId: value.jobId,
     metadata: {
-      approvalClass: CONFIG_CHANGE_APPROVAL_CLASS,
-      auditClass: CONFIG_CHANGE_APPROVAL_CLASS,
+      approvalClass,
+      auditClass: approvalClass,
       always_human: true,
       configChange,
+      ...(adminRequester ? { adminRequester } : {}),
     },
   });
 
@@ -492,6 +620,17 @@ async function applyConfigChange(approval: ApprovalRequest): Promise<ConfigChang
   if (!employee || employee.status !== "active") return fail("employee_not_active");
 
   const proposal = meta.proposal;
+
+  // M3: re-check surface guard at fulfill time — pre-existing non-Slack tickets are rejected
+  // when the flag is turned ON after filing (fail-closed, nothing written)
+  if (
+    proposal.kind === "channel_classification" &&
+    proposal.surface !== "slack" &&
+    isConfigChannelClassificationSurfaceGuardEnabledForOrg(approval.orgId)
+  ) {
+    return fail("surface_guard_rejected");
+  }
+
   let applied: ConfigChangeApplied;
   let channelRowId: string | null = null;
   try {
@@ -535,6 +674,14 @@ async function applyConfigChange(approval: ApprovalRequest): Promise<ConfigChang
       } else {
         applied = { ok: true, kind: proposal.kind, appliedAt: at, channelId: channel.id };
       }
+    } else if (proposal.kind === "party_audience") {
+      const party = await upsertOrgParty({
+        orgId: approval.orgId,
+        kind: proposal.partyKind,
+        identifier: proposal.identifier,
+        audience: proposal.audience,
+      });
+      applied = { ok: true, kind: proposal.kind, appliedAt: at, partyId: party.id };
     } else {
       const channel = await getOrgChannel(approval.orgId, proposal.surface, proposal.externalId);
       if (channel) {
