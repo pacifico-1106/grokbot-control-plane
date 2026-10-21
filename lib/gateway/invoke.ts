@@ -1799,6 +1799,7 @@ async function runGatewayInvokeInner(
       explicitClass,
       unclassified: disclosure.unclassified,
       employeeNoApproval: lineExternalNoApprovalFlag,
+      orgId: orgId || employee.orgId,
     };
     if (lineWaiveExternalDeny(lineRewriteBase)) {
       egress = {

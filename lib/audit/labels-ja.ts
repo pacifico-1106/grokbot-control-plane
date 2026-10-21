@@ -205,6 +205,7 @@ export const AUDIT_ACTION_LABELS_JA: Record<AuditAction, string> = {
   "line.post_failed": "LINEへの送信に失敗",
   "line.conversation_target_mismatch": "LINEの相手が一致せず",
   "line.conversation_wake": "LINEの会話で起動",
+  "line.web_only_refused": "LINEの高リスク承認を拒否（Webのみ）",
   "comm.not_sent": "メッセージを送っていない",
   "slack.file_uploaded": "Slackにファイルを添付",
   "slack.file_upload_failed": "Slackファイル添付に失敗",

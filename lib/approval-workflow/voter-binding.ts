@@ -582,21 +582,19 @@ export async function upsertProofVerifiedVoterBinding(
     return { ok: false, reason: channelCheck.reason || "channel_not_in_org", messageJa: "通知チャネルがこの組織に属していません。" };
   }
 
-  const existing = await getVoterBinding(input.orgId, input.provider, input.channelKey, input.externalUserId);
-  if (existing && existing.status === "active" && existing.memberId !== input.memberId) {
-    return {
-      ok: false,
-      reason: "bound_to_other_member",
-      messageJa: "この LINE アカウントは別のメンバーに紐付いています。先に紐付けを解除してください。",
-    };
-  }
-
   const now = new Date();
   const expiresAt = new Date(now.getTime() + (input.expiresInDays ?? DEFAULT_EXPIRY_DAYS) * 24 * 60 * 60 * 1000);
 
   if (isDemoMode()) {
     const key = bindingKey(input);
     const previous = demoBindings.get(key);
+    if (previous && computeEffectiveStatus(previous) === "active" && previous.memberId !== input.memberId) {
+      return {
+        ok: false,
+        reason: "bound_to_other_member",
+        messageJa: "この LINE アカウントは別のメンバーに紐付いています。先に紐付けを解除してください。",
+      };
+    }
     if (previous?.verificationNonce) demoNonceIndex.delete(previous.verificationNonce);
     const binding: DemoBinding = {
       orgId: input.orgId,
@@ -622,33 +620,27 @@ export async function upsertProofVerifiedVoterBinding(
   if (!admin) {
     return { ok: false, reason: "supabase_unavailable", messageJa: "データベースに接続できません。" };
   }
-  const { data, error } = await admin
-    .from("approval_workflow_voter_bindings")
-    .upsert(
-      {
-        org_id: input.orgId,
-        provider: input.provider,
-        channel_key: input.channelKey,
-        external_user_id: input.externalUserId,
-        member_id: input.memberId,
-        team_id: input.teamId ?? channelCheck.teamId ?? null,
-        expires_at: expiresAt.toISOString(),
-        revoked_at: null,
-        verified_at: now.toISOString(),
-        verification_hash: null,
-        verification_expiry: null,
-        verification_nonce: null,
-        failed_verification_attempts: 0,
-        updated_at: now.toISOString(),
-      },
-      { onConflict: "org_id,provider,channel_key,external_user_id" }
-    )
-    .select("*")
-    .maybeSingle();
-  if (error || !data) {
+  const { data, error } = await admin.rpc("upsert_proof_verified_voter_binding", {
+    p_org: input.orgId,
+    p_provider: input.provider,
+    p_channel_key: input.channelKey,
+    p_external_user_id: input.externalUserId,
+    p_member_id: input.memberId,
+    p_team_id: input.teamId ?? channelCheck.teamId ?? null,
+    p_expires_at: expiresAt.toISOString(),
+  });
+  const payload = (data || {}) as { ok?: unknown; reason?: unknown; row?: unknown };
+  if (error || payload.ok !== true || !payload.row || typeof payload.row !== "object") {
+    if (payload.reason === "bound_to_other_member") {
+      return {
+        ok: false,
+        reason: "bound_to_other_member",
+        messageJa: "この LINE アカウントは別のメンバーに紐付いています。先に紐付けを解除してください。",
+      };
+    }
     return { ok: false, reason: "binding_create_failed", messageJa: "紐付けの保存に失敗しました。" };
   }
-  return { ok: true, binding: mapBindingRow(data as Record<string, unknown>) };
+  return { ok: true, binding: mapBindingRow(payload.row as Record<string, unknown>) };
 }
 
 export async function listVoterBindings(

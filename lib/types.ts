@@ -571,6 +571,8 @@ export type AuditAction =
   | "inbound_notice.rejected"
   /** L-7: per-employee LINE 1:1 conversation wake. Metadata: ids / eventKey only — never the body. */
   | "line.conversation_wake"
+  /** Until passkeys: LINE postback refused a high-risk approval (web only). */
+  | "line.web_only_refused"
   | "slack.internal_im_wake"
   | "slack.user_token_im_wake"
   | "slack.im_wake_skipped"

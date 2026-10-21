@@ -22,6 +22,7 @@ import { checkApproverAuthority, recordApproverAuthority, verifyApproverIdentity
 import { promoteOwnerApproverConflict, promoteOwnerRequesterUnidentified, requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
 import { isDemoMode } from "@/lib/mode";
 import { isHoldReleaseTicket } from "@/lib/safety/hold-config";
+import { isLineSurfaceApproval, lineWebOnlyHighRiskVerdict } from "@/lib/comm/line-web-only-high-risk";
 import { PROMOTE_OWNER_TOOL } from "@/lib/approver-authority/targets";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { withDemoWorkflowLock } from "@/lib/approval-workflow/lock";
@@ -77,6 +78,13 @@ export async function resolveApprovalWithWorkflow(
     if (ticket && isHoldReleaseTicket(ticket)) {
       return { ok: false, approval: null, workflowApplied: false, workflowComplete: false, workflowApproved: false,
         workflowRejected: false, progress: null, reason: "hold_release_web_only" };
+    }
+    if (ticket && isLineSurfaceApproval({ resolvedBy, externalVoter: opts.externalVoter })) {
+      const verdict = lineWebOnlyHighRiskVerdict(ticket);
+      if (verdict.refuse) {
+        return { ok: false, approval: null, workflowApplied: false, workflowComplete: false, workflowApproved: false,
+          workflowRejected: false, progress: null, reason: verdict.reason || "line_web_only_high_risk" };
+      }
     }
   }
   const result = await (isDemoMode()

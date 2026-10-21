@@ -12,6 +12,7 @@ import {
   setCommAccountSecrets,
 } from "@/lib/comm/accounts";
 import { DEMO_ORG, getRuntimeMembers } from "@/lib/demo-data";
+import { resetDemoConversationLinkCodes } from "@/lib/comm/conversation-link-code";
 import { resetDemoLineLinkCodes } from "@/lib/line/link-code";
 
 const ENV = [
@@ -34,6 +35,7 @@ beforeEach(async () => {
   delete process.env.NEXT_PUBLIC_SUPABASE_URL;
   resetDemoCommAccounts();
   resetDemoLineLinkCodes();
+  resetDemoConversationLinkCodes();
   const created = await createCommAccount({
     orgId: DEMO_ORG.id,
     employeeId: "emp_comm",
@@ -51,6 +53,7 @@ beforeEach(async () => {
 });
 afterEach(() => {
   resetDemoLineLinkCodes();
+  resetDemoConversationLinkCodes();
   resetDemoCommAccounts();
   for (const k of ENV) {
     if (saved[k] === undefined) delete process.env[k];
