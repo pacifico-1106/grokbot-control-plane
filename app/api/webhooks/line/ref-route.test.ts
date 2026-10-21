@@ -83,7 +83,16 @@ const { resolveLineApprovalMessage } = await import("@/lib/notify/line");
 type LineCall = { path: string; body: Record<string, unknown> };
 let lineCalls: LineCall[];
 let originalFetch: typeof fetch;
-const FLAGS = ["LINE_APPROVER_LINK_ENABLED", "LINE_APPROVER_BINDING_MATCH", "LINE_WORKFLOW_REVISION_REPLY", "LINE_RESOLVE_FOLLOWUP_REPLY"];
+const FLAGS = [
+  "LINE_APPROVER_LINK_ENABLED",
+  "LINE_APPROVER_BINDING_MATCH",
+  "LINE_WORKFLOW_REVISION_REPLY",
+  "LINE_RESOLVE_FOLLOWUP_REPLY",
+  "LINE_WEB_ONLY_HIGH_RISK_ENABLED",
+  "LINE_WEB_ONLY_HIGH_RISK_ORG_IDS",
+  "COMM_ACCOUNTS_ENABLED",
+  "LINE_CONVERSATION_ENABLED",
+];
 
 beforeEach(async () => {
   mock.module("@/lib/mode", DEMO_MODE);
@@ -284,6 +293,42 @@ describe("G7: resolve follow-up in the same Reply", () => {
     const texts = repliedTexts();
     expect(texts[0]).toBe("承認しました。");
     expect(texts[1]).toContain("✅ 承認済み");
+  });
+});
+
+describe("M1: LINE_WEB_ONLY_HIGH_RISK_ENABLED", () => {
+  test("flag OFF: unclassified pending ticket still approves on LINE (main behavior)", async () => {
+    employee = { id: "emp-1", orgId: ORG, approverUserIds: [DEST] };
+    approval = { id: "apr-1", orgId: ORG, employeeId: "emp-1", status: "pending", title: "テスト承認", tool: "employees.issue", metadata: {} };
+    await post([postbackEvent("a:ref12345")]);
+    expect(resolveCalls).toEqual([{ id: "apr-1", decision: "approved", actor: `line:${DEST}` }]);
+    expect(repliedTexts()).toContain("承認しました。");
+  });
+
+  test("flag ON: production-shaped admin ticket is refused and audited", async () => {
+    process.env.LINE_WEB_ONLY_HIGH_RISK_ENABLED = "true";
+    employee = { id: "emp-1", orgId: ORG, approverUserIds: [DEST] };
+    approval = {
+      id: "apr-1",
+      orgId: ORG,
+      employeeId: "emp-1",
+      status: "pending",
+      title: "AI社員の発行",
+      tool: "employees.issue",
+      purpose: "admin.hire",
+      metadata: {
+        adminTool: "employees.issue",
+        approvalClass: "admin",
+        always_human: true,
+        approvalPolicy: "always_human",
+        employeeAlwaysHuman: false,
+        isAdminMcpTool: true,
+      },
+    };
+    await post([postbackEvent("a:ref12345")]);
+    expect(resolveCalls).toHaveLength(0);
+    expect(repliedTexts().join("\n")).toContain("Web で承認してください");
+    expect(audits.some((a) => a.action === "line.web_only_refused")).toBe(true);
   });
 });
 

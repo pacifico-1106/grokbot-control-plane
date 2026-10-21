@@ -97,4 +97,15 @@ describe("upsertProofVerifiedVoterBinding", () => {
     expect(fn).toContain("upsert_proof_verified_voter_binding");
     expect(fn).not.toMatch(/\.upsert\(/);
   });
+
+  test("M2: RPC ON CONFLICT updates only revoked / expired / same member", async () => {
+    const { readFileSync } = await import("node:fs");
+    const sql = readFileSync(new URL("../../supabase/migrations/20261021110000_upsert_proof_verified_voter_binding.sql", import.meta.url), "utf8");
+    expect(sql).toMatch(/on conflict[\s\S]*do update[\s\S]*where/i);
+    expect(sql).toMatch(/revoked_at/i);
+    expect(sql).toMatch(/bound_to_other_member/);
+    const demo = readFileSync(new URL("./voter-binding.ts", import.meta.url), "utf8");
+    const block = demo.slice(demo.indexOf("if (isDemoMode())"), demo.indexOf("const admin = createSupabaseAdminClient()"));
+    expect(block).toMatch(/revokedAt|expired|bound_to_other_member/);
+  });
 });
