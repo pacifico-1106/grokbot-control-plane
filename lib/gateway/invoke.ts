@@ -2274,7 +2274,8 @@ async function runGatewayInvokeInner(
     const isAuthLinkApproval = priorApproval.metadata?.authActionLink === true;
     if (isAuthLinkApproval) {
       // H1: Check atomic claim - if already consumed, reject
-      const alreadyConsumed = priorApproval.metadata?.authLinkFulfillment?.consumed === true;
+      const fulfillmentMeta = priorApproval.metadata?.authLinkFulfillment as { consumed?: boolean } | undefined;
+      const alreadyConsumed = fulfillmentMeta?.consumed === true;
       if (alreadyConsumed) {
         await appendAuditEvent({
           orgId: orgId || employee.orgId,
@@ -2821,9 +2822,11 @@ async function runGatewayInvokeInner(
         // This identifies the human who initiated the request for self-approval prevention.
         const { resolveAdminRequester, requesterMetadata, SLACK_USER_ID_FORMAT } = await import("@/lib/admin-mcp/requester-identity");
         const bodyArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
-        const bodyConv = body.conversation && typeof body.conversation === "object" ? body.conversation : {};
+        const bodyConvRaw = body.conversation && typeof body.conversation === "object" ? body.conversation : {};
+        const bodyConv = bodyConvRaw as Record<string, unknown>;
+        const bodyObj = body as unknown as Record<string, unknown>;
         const rawSpeakerId =
-          (typeof (body as Record<string, unknown>).speakerId === "string" ? (body as Record<string, unknown>).speakerId : null) ||
+          (typeof bodyObj.speakerId === "string" ? bodyObj.speakerId : null) ||
           (typeof bodyConv.speakerId === "string" ? bodyConv.speakerId : null) ||
           (typeof bodyConv.user === "string" ? bodyConv.user : null) ||
           (typeof bodyArgs.speakerId === "string" ? bodyArgs.speakerId : null) ||
