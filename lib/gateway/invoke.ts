@@ -119,7 +119,6 @@ import {
   type ConversationDelivery,
   type InvokeSnapshot,
 } from "@/lib/approvals/fulfill";
-import { POST_OUTCOME_UNKNOWN } from "@/lib/comm-reply-dedup/guard";
 import { isRetryableApprovalFailure } from "@/lib/approvals/execution";
 import {
   authLinkFulfillmentBlocksReplay,
