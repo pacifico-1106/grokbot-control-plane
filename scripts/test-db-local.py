@@ -1078,6 +1078,11 @@ try:
           "org delete cascades, no plaintext column; re-applicable; "
           "rollback refused while an unused code exists, then drops the table; forward again.")
     # Atomic voter-binding RPC (20261021110000). Concurrent first INSERT cannot re-point.
+    # Columns team_id / verified_at / verification_* come from later F8 follow-ups;
+    # test-db-local applies f8_enforcement only, so bring those columns in first.
+    sql(ROOT / "supabase/migrations/20260927100000_voter_binding_verification.sql")
+    sql(ROOT / "supabase/migrations/20260927400000_voter_binding_security_hardening.sql")
+    sql(ROOT / "supabase/migrations/20260928100000_voter_binding_verification_nonce.sql")
     upvb = ROOT / "supabase/migrations/20261021110000_upsert_proof_verified_voter_binding.sql"
     upvb_rb = ROOT / "supabase/verification/20261021110000_upsert_proof_verified_voter_binding_rollback.sql"
     sql(upvb)
