@@ -12,6 +12,7 @@ import {
   setCommAccountSecrets,
 } from "@/lib/comm/accounts";
 import { DEMO_ORG, getRuntimeMembers } from "@/lib/demo-data";
+import { resetDemoConversationLinkCodes } from "@/lib/comm/conversation-link-code";
 import { resetDemoLineLinkCodes } from "@/lib/line/link-code";
 
 const ENV = [
@@ -34,6 +35,7 @@ beforeEach(async () => {
   delete process.env.NEXT_PUBLIC_SUPABASE_URL;
   resetDemoCommAccounts();
   resetDemoLineLinkCodes();
+  resetDemoConversationLinkCodes();
   const created = await createCommAccount({
     orgId: DEMO_ORG.id,
     employeeId: "emp_comm",
@@ -51,6 +53,7 @@ beforeEach(async () => {
 });
 afterEach(() => {
   resetDemoLineLinkCodes();
+  resetDemoConversationLinkCodes();
   resetDemoCommAccounts();
   for (const k of ENV) {
     if (saved[k] === undefined) delete process.env[k];
@@ -140,5 +143,11 @@ describe("/api/employees/[id]/comm-link-code", () => {
   test("admin MCP source has no conversation link-code issue tool", () => {
     const src = readFileSync(join(process.cwd(), "lib/mcp/admin-tools.ts"), "utf8");
     expect(src).not.toMatch(/issueLineLinkCode|comm-link-code|conversation_link_code/);
+  });
+
+  test("M1: issue/pending do not pass comm-account id as line_approver_link_codes.channel_id", () => {
+    const src = readFileSync(join(process.cwd(), "app/api/employees/[id]/comm-link-code/route.ts"), "utf8");
+    expect(src).not.toMatch(/channelId:\s*found\.account\.id/);
+    expect(src).toMatch(/issueConversationLinkCode|getPendingConversationLinkCode/);
   });
 });

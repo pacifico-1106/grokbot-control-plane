@@ -24,6 +24,7 @@ import {
   type LinkCodeGuardBackend,
   type LinkCodeReservation,
 } from "@/lib/comm/link-code-guard";
+import { consumeConversationLinkCode } from "@/lib/comm/conversation-link-code";
 import { consumeLineLinkCode } from "@/lib/line/link-code";
 import { isDemoMode } from "@/lib/mode";
 
@@ -128,6 +129,37 @@ export async function redeemLineLinkCode(input: {
     { orgId: input.orgId, accountKey: `line_channel:${input.channelId}`, lineUserId: input.lineUserId },
     async () => {
       const c = await consumeLineLinkCode(input);
+      return c.ok ? { ok: true as const, value: c } : { ok: false as const, reason: c.reason };
+    }
+  );
+  if (r.ok) return { ok: true, memberId: r.value.memberId, issuedByUserId: r.value.issuedByUserId };
+  return { ok: false, reason: r.reason, replyJa: r.replyJa };
+}
+
+/** Conversation (comm account) redeem — same guard, own table (M1). */
+export async function redeemConversationLinkCodeGuarded(input: {
+  orgId: string;
+  accountId: string;
+  code: string;
+  lineUserId: string;
+}): Promise<RedeemLineLinkCodeResult> {
+  const consume = () =>
+    consumeConversationLinkCode({
+      orgId: input.orgId,
+      accountId: input.accountId,
+      code: input.code,
+      lineUserId: input.lineUserId,
+    });
+  if (!isLineLinkCodeLimitsEnabled()) {
+    const r = await consume();
+    return r.ok ? r : { ok: false, reason: r.reason, replyJa: null };
+  }
+  const backend = (await guardBackend()) ?? UNAVAILABLE;
+  const r = await withLinkCodeGuard(
+    backend,
+    { orgId: input.orgId, accountKey: `comm_account:${input.accountId}`, lineUserId: input.lineUserId },
+    async () => {
+      const c = await consume();
       return c.ok ? { ok: true as const, value: c } : { ok: false as const, reason: c.reason };
     }
   );

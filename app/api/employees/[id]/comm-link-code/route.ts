@@ -10,7 +10,7 @@ import { listCommAccounts } from "@/lib/comm/accounts";
 import { isCommAccountsEnabled, isLineConversationEnabled } from "@/lib/comm/flags";
 import { LINE_COMM_LINK_ISSUE_FORBIDDEN_JA } from "@/lib/comm/line-poc-copy";
 import { memberCanIssueConversationLinkCode } from "@/lib/employees/comm-link-code-permissions";
-import { getPendingLineLinkCode, issueLineLinkCode } from "@/lib/line/link-code";
+import { getPendingConversationLinkCode, issueConversationLinkCode } from "@/lib/comm/conversation-link-code";
 import { requireCapability } from "@/lib/team/demo-actor";
 import { appendAuditEvent } from "@/lib/data/audit";
 
@@ -57,9 +57,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     return json({ ok: false, error: "employee_not_found" }, 404);
   }
   if ("error" in found) return json({ ok: false, error: found.error }, 409);
-  const pending = await getPendingLineLinkCode({
+  const pending = await getPendingConversationLinkCode({
     orgId: g.actor.orgId,
-    channelId: found.account.id,
+    accountId: found.account.id,
     memberId: g.actor.id,
   });
   return json({
@@ -79,9 +79,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return json({ ok: false, error: "employee_not_found" }, 404);
   }
   if ("error" in found) return json({ ok: false, error: found.error }, 409);
-  const issued = await issueLineLinkCode({
+  const issued = await issueConversationLinkCode({
     orgId: g.actor.orgId,
-    channelId: found.account.id,
+    accountId: found.account.id,
     memberId: g.actor.id,
     issuedByUserId: g.actor.id,
   });

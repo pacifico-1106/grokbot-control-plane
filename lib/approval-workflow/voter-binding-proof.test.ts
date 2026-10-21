@@ -4,6 +4,7 @@
  * must never silently re-point an existing active binding to another member.
  */
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { getRuntimeMembers } from "@/lib/demo-data";
 import type { OrgMember } from "@/lib/types";
 
 mock.module("@/lib/mode", () => ({
@@ -23,7 +24,10 @@ const member = (id: string, orgId = ORG, status: OrgMember["status"] = "active")
 });
 
 mock.module("@/lib/demo-data", () => ({
-  getRuntimeMemberById: (id: string) => members.get(id) ?? null,
+  // Keep real demo members so this file does not impersonate owner when
+  // another test looks up mem_3 (resolveDemoActor falls back to owner).
+  getRuntimeMemberById: (id: string) =>
+    members.get(id) ?? getRuntimeMembers().find((m) => m.id === id) ?? null,
 }));
 
 const { upsertProofVerifiedVoterBinding, getVoterBinding, revokeVoterBinding, resetDemoVoterBindings } =
@@ -84,5 +88,24 @@ describe("upsertProofVerifiedVoterBinding", () => {
     await upsertProofVerifiedVoterBinding(input("mem-a"));
     expect(await getMemberIdFromVoterBinding(ORG, { provider: "line", channelKey: "chn-other", userId: "U-line-1" })).toBeNull();
     expect(await getMemberIdFromVoterBinding(OTHER_ORG, { provider: "line", channelKey: "chn-line", userId: "U-line-1" })).toBeNull();
+  });
+
+  test("M4: production path uses a conditional RPC, not get-then-upsert", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("./voter-binding.ts", import.meta.url), "utf8");
+    const fn = src.slice(src.indexOf("export async function upsertProofVerifiedVoterBinding"), src.indexOf("export async function listVoterBindings"));
+    expect(fn).toContain("upsert_proof_verified_voter_binding");
+    expect(fn).not.toMatch(/\.upsert\(/);
+  });
+
+  test("M2: RPC ON CONFLICT updates only revoked / expired / same member", async () => {
+    const { readFileSync } = await import("node:fs");
+    const sql = readFileSync(new URL("../../supabase/migrations/20261021110000_upsert_proof_verified_voter_binding.sql", import.meta.url), "utf8");
+    expect(sql).toMatch(/on conflict[\s\S]*do update[\s\S]*where/i);
+    expect(sql).toMatch(/revoked_at/i);
+    expect(sql).toMatch(/bound_to_other_member/);
+    const demo = readFileSync(new URL("./voter-binding.ts", import.meta.url), "utf8");
+    const block = demo.slice(demo.indexOf("if (isDemoMode())"), demo.indexOf("const admin = createSupabaseAdminClient()"));
+    expect(block).toMatch(/revokedAt|expired|bound_to_other_member/);
   });
 });

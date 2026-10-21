@@ -157,6 +157,12 @@ ADDITIVE = [
     # 20261013200000. Parent rollback refuses while these tables exist.
     ("20261014100000_", "tests/security/db-comm-line-reply-tokens.sql",
      ("comm_line_reply_tokens", "comm_line_send_unknown")),
+    # Conversation link codes: child of 20261013200000 (account_id FK).
+    ("20261021100000_", "tests/security/db-line-conversation-link-codes.sql",
+     ("line_conversation_link_codes",)),
+    # Atomic voter-binding RPC (function only; table already exists).
+    ("20261021110000_", "tests/security/db-upsert-proof-verified-voter-binding.sql",
+     "to_regprocedure('public.upsert_proof_verified_voter_binding(uuid,text,text,text,uuid,text,timestamptz)') is null"),
     ("20261016100000_", "tests/security/db-ai-peer-wake-guard.sql",
      "to_regclass('public.ai_peer_wake_allowlist') is null"
      " and to_regclass('public.ai_peer_wake_threads') is null"
@@ -425,6 +431,9 @@ try:
         if prefix.startswith("20261013200000_"):
             # Child tables were re-applied above. Parent rollback must refuse
             # while they exist; then drop the child first (no CASCADE).
+            conv = next((n for n in order if n.startswith("20261021100000_")), None)
+            if conv:
+                sql_text(rollback_block((MIGRATIONS / conv).read_text()), single=False)
             child = next((n for n in order if n.startswith("20261014100000_")), None)
             assert child, "L-6 child migration missing"
             sql_text(rollback_block((MIGRATIONS / name).read_text()), single=False,
@@ -459,6 +468,9 @@ try:
         if prefix.startswith("20261013200000_"):
             child = next((n for n in order if n.startswith("20261014100000_")), None)
             sql_file(MIGRATIONS / child)
+            conv = next((n for n in order if n.startswith("20261021100000_")), None)
+            if conv:
+                sql_file(MIGRATIONS / conv)
         if prefix.startswith("20261012500000_"):
             child = next((n for n in order if n.startswith("20261020300000_")), None)
             sql_file(MIGRATIONS / child)
