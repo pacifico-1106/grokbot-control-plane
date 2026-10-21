@@ -147,8 +147,9 @@ async function createApprovedAuthLink(jobSuffix: string) {
   await bindSpeaker();
   const originalBody = makeAuthLinkBody();
   const args = mailArgs({ body: originalBody });
+  const jobId = `job_auth_flw_${jobSuffix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const created = await withNeedsApprovalMailPolicy(() =>
-    invokeMail({ jobSuffix: `${jobSuffix}_create`, speakerId: SPEAKER, args })
+    invokeMail({ jobSuffix, speakerId: SPEAKER, args, jobId })
   );
   expect(created.httpStatus).toBe(402);
   const approvalId = created.body.approvalId as string;
@@ -157,7 +158,7 @@ async function createApprovedAuthLink(jobSuffix: string) {
     memberId: "mem_1",
   });
   expect(approved?.status).toBe("approved");
-  return { approvalId, args, jobId: created.body.jobId as string };
+  return { approvalId, args, jobId };
 }
 
 function assertNoSecrets(value: unknown) {
@@ -277,11 +278,12 @@ describe("M1: consume only after send; CAS sending lock", () => {
   });
 
   test("pin mismatch does not consume and does not take the sending lock", async () => {
-    const { approvalId, args } = await createApprovedAuthLink("m1_pin");
+    const { approvalId, args, jobId } = await createApprovedAuthLink("m1_pin");
     const mismatch = await withNeedsApprovalMailPolicy(() =>
       invokeMail({
         jobSuffix: "m1_pin_bad",
         approvalId,
+        jobId,
         speakerId: SPEAKER,
         args: { ...args, subject: "改ざんされた件名" },
       })
@@ -297,17 +299,18 @@ describe("M1: consume only after send; CAS sending lock", () => {
   });
 
   test("after pin mismatch, the same approvalId can still send once", async () => {
-    const { approvalId, args } = await createApprovedAuthLink("m1_retry_pin");
+    const { approvalId, args, jobId } = await createApprovedAuthLink("m1_retry_pin");
     await withNeedsApprovalMailPolicy(() =>
       invokeMail({
         jobSuffix: "m1_retry_pin_bad",
         approvalId,
+        jobId,
         speakerId: SPEAKER,
         args: { ...args, subject: "改ざんされた件名" },
       })
     );
     const retry = await withNeedsApprovalMailPolicy(() =>
-      invokeMail({ jobSuffix: "m1_retry_pin_ok", approvalId, speakerId: SPEAKER, args })
+      invokeMail({ jobSuffix: "m1_retry_pin_ok", approvalId, jobId, speakerId: SPEAKER, args })
     );
     expect(retry.httpStatus).toBe(200);
     expect(retry.body.ok).toBe(true);
@@ -319,13 +322,13 @@ describe("M1: consume only after send; CAS sending lock", () => {
     await bindMailbox();
     process.env.MAIL_SEND_GMAIL_LIVE = "true";
     const gmail = mockGmail();
-    const { approvalId, args } = await createApprovedAuthLink("m1_cas");
+    const { approvalId, args, jobId } = await createApprovedAuthLink("m1_cas");
     const [first, second] = await Promise.all([
       withNeedsApprovalMailPolicy(() =>
-        invokeMail({ jobSuffix: "m1_cas_a", approvalId, speakerId: SPEAKER, args })
+        invokeMail({ jobSuffix: "m1_cas_a", approvalId, jobId, speakerId: SPEAKER, args })
       ),
       withNeedsApprovalMailPolicy(() =>
-        invokeMail({ jobSuffix: "m1_cas_b", approvalId, speakerId: SPEAKER, args })
+        invokeMail({ jobSuffix: "m1_cas_b", approvalId, jobId, speakerId: SPEAKER, args })
       ),
     ]);
     const statuses = [first.httpStatus, second.httpStatus].sort();
@@ -345,9 +348,9 @@ describe("M1: consume only after send; CAS sending lock", () => {
     await bindMailbox();
     process.env.MAIL_SEND_GMAIL_LIVE = "true";
     mockGmail({ sendStatus: 403 });
-    const { approvalId, args } = await createApprovedAuthLink("m1_fail");
+    const { approvalId, args, jobId } = await createApprovedAuthLink("m1_fail");
     const failed = await withNeedsApprovalMailPolicy(() =>
-      invokeMail({ jobSuffix: "m1_fail_1", approvalId, speakerId: SPEAKER, args })
+      invokeMail({ jobSuffix: "m1_fail_1", approvalId, jobId, speakerId: SPEAKER, args })
     );
     expect(failed.body.ok).toBe(false);
     expect(failed.body.code).not.toBe("auth_link_already_sent");
@@ -359,7 +362,7 @@ describe("M1: consume only after send; CAS sending lock", () => {
 
     mockGmail({ sendStatus: 200 });
     const retry = await withNeedsApprovalMailPolicy(() =>
-      invokeMail({ jobSuffix: "m1_fail_2", approvalId, speakerId: SPEAKER, args })
+      invokeMail({ jobSuffix: "m1_fail_2", approvalId, jobId, speakerId: SPEAKER, args })
     );
     expect(retry.httpStatus).toBe(200);
     expect(retry.body.ok).toBe(true);
@@ -378,9 +381,9 @@ describe("L1: approvalId replay uses fulfillMailSend / MAIL_SEND_GMAIL_LIVE", ()
     await bindMailbox();
     process.env.MAIL_SEND_GMAIL_LIVE = "true";
     const gmail = mockGmail();
-    const { approvalId, args } = await createApprovedAuthLink("l1_live");
+    const { approvalId, args, jobId } = await createApprovedAuthLink("l1_live");
     const sent = await withNeedsApprovalMailPolicy(() =>
-      invokeMail({ jobSuffix: "l1_live_send", approvalId, speakerId: SPEAKER, args })
+      invokeMail({ jobSuffix: "l1_live_send", approvalId, jobId, speakerId: SPEAKER, args })
     );
     expect(sent.httpStatus).toBe(200);
     expect(sent.body.ok).toBe(true);
@@ -395,9 +398,9 @@ describe("L1: approvalId replay uses fulfillMailSend / MAIL_SEND_GMAIL_LIVE", ()
   test("MAIL_SEND_GMAIL_LIVE=OFF uses stub delivery (not a hardcoded invoke sent:true skip)", async () => {
     delete process.env.MAIL_SEND_GMAIL_LIVE;
     const gmail = mockGmail();
-    const { approvalId, args } = await createApprovedAuthLink("l1_stub");
+    const { approvalId, args, jobId } = await createApprovedAuthLink("l1_stub");
     const sent = await withNeedsApprovalMailPolicy(() =>
-      invokeMail({ jobSuffix: "l1_stub_send", approvalId, speakerId: SPEAKER, args })
+      invokeMail({ jobSuffix: "l1_stub_send", approvalId, jobId, speakerId: SPEAKER, args })
     );
     expect(sent.httpStatus).toBe(200);
     expect(sent.body.ok).toBe(true);

@@ -110,13 +110,24 @@ import {
 import { parseSnsSurface, publishSnsPost, type SnsPublishResult } from "@/lib/gateway/adapters/sns";
 import {
   buildInvokeSnapshot,
+  deliverApprovedMailFromArgs,
   fulfillApprovedInvoke,
   conversationDeliveryFromFulfillment,
   snsDeliveryFromFulfillment,
   parseFulfillment,
   parseInvokeSnapshot,
   type ConversationDelivery,
+  type InvokeSnapshot,
 } from "@/lib/approvals/fulfill";
+import { POST_OUTCOME_UNKNOWN } from "@/lib/comm-reply-dedup/guard";
+import { isRetryableApprovalFailure } from "@/lib/approvals/execution";
+import {
+  authLinkFulfillmentBlocksReplay,
+  claimAuthLinkSend,
+  consumeAuthLinkSend,
+  markAuthLinkSendUncertain,
+  releaseAuthLinkSend,
+} from "@/lib/approvals/auth-link-send-claim";
 import { approvedRerunConversationDelivery } from "@/lib/approvals/approved-rerun-delivery";
 import {
   auditLegacySnapshotAttachmentBlock,
@@ -2273,31 +2284,41 @@ async function runGatewayInvokeInner(
     // empty body has a specific error code (auth_link_original_required)
     const isAuthLinkApproval = priorApproval.metadata?.authActionLink === true;
     if (isAuthLinkApproval) {
-      // H1: Check atomic claim - if already consumed, reject
-      const fulfillmentMeta = priorApproval.metadata?.authLinkFulfillment as { consumed?: boolean } | undefined;
-      const alreadyConsumed = fulfillmentMeta?.consumed === true;
-      if (alreadyConsumed) {
+      // M1: Fast-path block for consumed / in-flight / uncertain. The CAS
+      // claim below is the source of truth for concurrent callers.
+      const replayBlock = authLinkFulfillmentBlocksReplay(priorApproval);
+      if (!replayBlock.ok) {
         await appendAuditEvent({
           orgId: orgId || employee.orgId,
           employeeId,
           credentialId: input.credentialId || employee.credentialId,
           action: "tool.invoke",
           purpose,
-          summary: "認証リンクの再送信を拒否（既に送信済み）",
+          summary:
+            replayBlock.code === "auth_link_send_in_progress"
+              ? "認証リンクの再送信を拒否（送信中）"
+              : replayBlock.code === "auth_link_send_uncertain"
+                ? "認証リンクの再送信を拒否（結果不明）"
+                : "認証リンクの再送信を拒否（既に送信済み）",
           metadata: {
             tool,
             jobId,
             approvalId: priorApprovalId,
-            code: "auth_link_already_sent",
+            code: replayBlock.code,
             phase: "reinvoke",
           },
         });
         return jsonResult(
           {
             ok: false,
-            code: "auth_link_already_sent",
-            error: "auth_link_already_sent",
-            message: "この認証リンクは既に送信済みです。同じ承認で複数回送信することはできません。",
+            code: replayBlock.code,
+            error: replayBlock.code,
+            message:
+              replayBlock.code === "auth_link_send_in_progress"
+                ? "この認証リンクは現在送信中です。完了を待ってから再試行してください。"
+                : replayBlock.code === "auth_link_send_uncertain"
+                  ? "この認証リンクは送信結果が不明なため再送しません。必要なら新しい承認を依頼してください。"
+                  : "この認証リンクは既に送信済みです。同じ承認で複数回送信することはできません。",
             needs_approval: false,
             approvalId: priorApprovalId,
             employeeId,
@@ -2446,54 +2467,7 @@ async function runGatewayInvokeInner(
         );
       }
 
-      // H1: Auth-link re-invoke is valid. Mark as consumed and proceed to send.
-      // The actual send happens at the end of the function for mail.send.
-      // We need to update the approval metadata to mark it as consumed.
-      const { updateApprovalMetadata } = await import("@/lib/data/approvals");
-      const consumeResult = await updateApprovalMetadata(priorApproval, {
-        authLinkFulfillment: {
-          consumed: true,
-          consumedAt: new Date().toISOString(),
-          consumedByJobId: jobId,
-        },
-      });
-      if (!consumeResult) {
-        // Failed to mark as consumed - fail safe
-        await appendAuditEvent({
-          orgId: orgId || employee.orgId,
-          employeeId,
-          credentialId: input.credentialId || employee.credentialId,
-          action: "tool.invoke",
-          purpose,
-          summary: "認証リンクの消費マーキングに失敗",
-          metadata: {
-            tool,
-            jobId,
-            approvalId: priorApprovalId,
-            code: "auth_link_consume_failed",
-            phase: "reinvoke",
-          },
-        });
-        return jsonResult(
-          {
-            ok: false,
-            code: "auth_link_consume_failed",
-            error: "auth_link_consume_failed",
-            message: "認証リンクの送信準備に失敗しました。もう一度お試しください。",
-            needs_approval: false,
-            approvalId: priorApprovalId,
-            employeeId,
-            tool,
-            purpose,
-            jobId,
-          },
-          500
-        );
-      }
-
-      // Auth-link send proceeds - the actual Gmail send happens via the normal mail.send path
-      // which will be triggered by the fact that priorApprovalOk is true and tool is mail.send.
-      // We've already validated all auth-link conditions, so we can proceed.
+      // M1: pin check and send happen below. Do not consume here.
     }
 
     // Pin check: the re-invoke must carry exactly the approved mail (every
@@ -2606,6 +2580,141 @@ async function runGatewayInvokeInner(
           tool,
           purpose,
           jobId,
+        },
+        409
+      );
+    }
+
+    if (isAuthLinkApproval) {
+      const claim = await claimAuthLinkSend(priorApproval, jobId);
+      if (!claim.ok) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "tool.invoke",
+          purpose,
+          summary: `認証リンクの送信ロック取得を拒否（${claim.code}）`,
+          metadata: { tool, jobId, approvalId: priorApprovalId, code: claim.code, phase: "reinvoke" },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: claim.code,
+            error: claim.code,
+            message:
+              claim.code === "auth_link_send_in_progress"
+                ? "この認証リンクは現在送信中です。完了を待ってから再試行してください。"
+                : claim.code === "auth_link_send_uncertain"
+                  ? "この認証リンクは送信結果が不明なため再送しません。必要なら新しい承認を依頼してください。"
+                  : "この認証リンクは既に送信済みです。同じ承認で複数回送信することはできません。",
+            needs_approval: false,
+            approvalId: priorApprovalId,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          409
+        );
+      }
+
+      const sendArgs =
+        body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
+      let fulfillment: Awaited<ReturnType<typeof deliverApprovedMailFromArgs>>;
+      try {
+        fulfillment = await deliverApprovedMailFromArgs({
+          approval: priorApproval,
+          args: sendArgs,
+          conversation: (body.conversation ?? null) as InvokeSnapshot["conversation"],
+          jobId,
+          tool,
+        });
+      } catch {
+        await releaseAuthLinkSend(priorApproval, jobId);
+        return jsonResult(
+          {
+            ok: false,
+            code: "auth_link_send_failed",
+            error: "auth_link_send_failed",
+            message: "認証リンクの送信に失敗しました。もう一度お試しください。",
+            needs_approval: false,
+            approvalId: priorApprovalId,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          500
+        );
+      }
+
+      if (fulfillment.ok) {
+        await consumeAuthLinkSend(priorApproval, jobId);
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "tool.invoke",
+          purpose,
+          summary: "認証リンクを送信しました",
+          metadata: {
+            tool,
+            jobId,
+            approvalId: priorApprovalId,
+            delivery: fulfillment.delivery,
+            phase: "reinvoke",
+          },
+        }).catch(() => undefined);
+        return jsonResult({
+          ok: true,
+          sent: true,
+          demo: runtimeModeLabel() === "demo",
+          mode: runtimeModeLabel(),
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+          priorApprovalId: priorApprovalId || undefined,
+          result: {
+            sent: true,
+            delivery: fulfillment.delivery,
+            id: fulfillment.id,
+          },
+          message: fulfillment.delivery === "stub"
+            ? "invoke completed (mail.send; MAIL_SEND_GMAIL_LIVE=OFF stub)"
+            : "invoke completed (mail.send; gmail)",
+        });
+      }
+
+      const sendError = fulfillment.error || "auth_link_send_failed";
+      if (sendError === POST_OUTCOME_UNKNOWN || !isRetryableApprovalFailure("mail.send", sendError)) {
+        await markAuthLinkSendUncertain(priorApproval, jobId);
+      } else {
+        await releaseAuthLinkSend(priorApproval, jobId);
+      }
+      await appendAuditEvent({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        credentialId: input.credentialId || employee.credentialId,
+        action: "tool.invoke",
+        purpose,
+        summary: `認証リンクの送信を停止（${sendError}）`,
+        metadata: { tool, jobId, approvalId: priorApprovalId, code: sendError, phase: "reinvoke" },
+      }).catch(() => undefined);
+      return jsonResult(
+        {
+          ok: false,
+          code: sendError,
+          error: sendError,
+          message: "認証リンクの送信に失敗しました。送信していません。",
+          needs_approval: false,
+          approvalId: priorApprovalId,
+          employeeId,
+          tool,
+          purpose,
+          jobId,
+          result: { sent: false },
         },
         409
       );
@@ -2834,6 +2943,43 @@ async function runGatewayInvokeInner(
         const speakerId = rawSpeakerId && SLACK_USER_ID_FORMAT.test(rawSpeakerId) ? rawSpeakerId : null;
         const requesterIdentity = await resolveAdminRequester(orgId, speakerId);
         const requesterMeta = requesterMetadata(requesterIdentity);
+
+        // M2: fail-closed — Slack speakerId must resolve to an active member.
+        // Missing or unresolved speaker never creates an auth-link ticket.
+        if (!requesterIdentity.identified) {
+          const reason = requesterIdentity.reason;
+          await appendAuditEvent({
+            orgId,
+            employeeId,
+            credentialId: input.credentialId || employee.credentialId,
+            action: "gateway.auth_action_link_blocked",
+            purpose,
+            summary: `認証リンク申請を依頼者未特定で拒否（${reason}）`,
+            metadata: {
+              tool,
+              jobId,
+              code: "auth_link_requester_unresolved",
+              reason,
+              linkCount: detectedAuthLinks.length,
+            },
+          }).catch(() => undefined);
+          return jsonResult(
+            {
+              ok: false,
+              code: "auth_link_requester_unresolved",
+              error: "auth_link_requester_unresolved",
+              reason,
+              message: "認証リンクの申請には、Slack の発言者を社員（member）として特定できる必要があります。",
+              messageJa: "認証リンクの申請には、Slack の発言者を社員（member）として特定できる必要があります。",
+              needs_approval: false,
+              employeeId,
+              tool,
+              purpose,
+              jobId,
+            },
+            400
+          );
+        }
 
         try {
           const created = await createApproval({

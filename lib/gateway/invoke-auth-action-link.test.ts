@@ -23,13 +23,33 @@ const INTERNAL_DOMAIN = "tokyo307inc.com";
 
 // google_api_key pattern requires 39+ chars (AIza + 35)
 const DUMMY_API_KEY = "AIzaSyDummyKeyForTestingPurposesABC12345";
+const AUTH_LINK_SPEAKER = "U0AUTHTEST01";
+
+async function bindAuthLinkSpeaker(memberId = "mem_1", opts?: { reset?: boolean }) {
+  const { createPendingVoterBinding, verifyVoterBinding, resetDemoVoterBindings } = await import(
+    "@/lib/approval-workflow/voter-binding"
+  );
+  if (opts?.reset !== false) resetDemoVoterBindings();
+  const input = {
+    orgId: DEMO_ORG.id,
+    provider: "slack" as const,
+    channelKey: "C_AUTH_LINK",
+    externalUserId: AUTH_LINK_SPEAKER,
+    memberId,
+  };
+  const created = await createPendingVoterBinding(input);
+  if (!created.ok) throw new Error(created.reason);
+  const verified = await verifyVoterBinding({ ...input, verificationCode: created.verificationCode });
+  if (!verified.ok) throw new Error(verified.reason);
+}
 
 let savedFlag: string | undefined;
 let savedOrgIds: string | undefined;
 
-beforeEach(() => {
+beforeEach(async () => {
   savedFlag = process.env.SECRET_AUTH_ACTION_LINK_ENABLED;
   savedOrgIds = process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+  await bindAuthLinkSpeaker();
 });
 
 afterEach(async () => {
@@ -85,6 +105,7 @@ function sendMailWithAuthLink(opts: {
       tool: "mail.send",
       purpose: "sales.outreach",
       jobId: `job_auth_link_${opts.jobSuffix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      speakerId: AUTH_LINK_SPEAKER,
       args: {
         to: toArray.length === 1 ? toArray[0] : toArray,
         from: "noreply@oneplace.tokyo307inc.com",
@@ -325,6 +346,7 @@ describe("H1: _ORG_IDS外のorgはgoogle_api_keyでブロック", () => {
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId: `job_h1_external_${Date.now()}`,
           args: {
             to: "external@customer.example",
@@ -349,6 +371,7 @@ describe("H1: _ORG_IDS外のorgはgoogle_api_keyでブロック", () => {
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId: `job_h1_internal_${Date.now()}`,
           args: {
             to: "user@tokyo307inc.com",
@@ -376,6 +399,7 @@ describe("H1: _ORG_IDS外のorgはgoogle_api_keyでブロック", () => {
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId: `job_h1_own_org_${Date.now()}`,
           args: {
             to: "user@tokyo307inc.com",
@@ -454,6 +478,7 @@ describe("H1: _ORG_IDS外のorgはgoogle_api_keyでブロック", () => {
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId: `job_h1_org_override_${Date.now()}`,
           args: {
             to: "user@tokyo307inc.com",
@@ -499,6 +524,7 @@ https://oneplace.firebaseapp.com/__/auth/action?mode=resetPassword&oobCode=oobCo
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId: `job_m1_extra_key_${Date.now()}`,
           args: {
             to: "user@tokyo307inc.com",
@@ -777,15 +803,28 @@ describe("M2a: 人間依頼者の自己承認防止 (speakerId → requesterMemb
   });
 
   test("M2a: without speakerId, no requesterMemberId is set (AI employee request)", async () => {
-    // No conversation context → no speakerId → no requesterMemberId
+    // Follow-up M2: missing speakerId is fail-closed — no ticket.
     const result = await withNeedsApprovalMailPolicy(() =>
-      sendMailWithAuthLink({ to: "user@tokyo307inc.com", jobSuffix: "m2a_no_speaker" })
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId: `job_m2a_no_speaker_${Date.now()}`,
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: makeAuthLinkBody("user@tokyo307inc.com"),
+          },
+        },
+      })
     );
-    expect(result.httpStatus).toBe(402);
-    const approval = await getApprovalById(result.body.approvalId as string, DEMO_ORG.id);
-    expect(approval).toBeTruthy();
-    // M2a: No speakerId means no requesterMemberId
-    expect(approval!.metadata.requesterMemberId).toBeUndefined();
+    expect(result.httpStatus).toBe(400);
+    expect(result.body.code).toBe("auth_link_requester_unresolved");
+    expect(result.body.reason).toBe("not_declared");
+    expect(result.body.approvalId).toBeFalsy();
   });
 
   test("M2a: unresolved speakerId (no voter binding) does not set requesterMemberId", async () => {
@@ -812,13 +851,10 @@ describe("M2a: 人間依頼者の自己承認防止 (speakerId → requesterMemb
       });
     });
 
-    expect(result.httpStatus).toBe(402);
-    const approval = await getApprovalById(result.body.approvalId as string, DEMO_ORG.id);
-    expect(approval).toBeTruthy();
-    // M2a: Unresolved speakerId should NOT set requesterMemberId
-    // Document: requesterIdentity.identified will be false with reason
-    expect(approval!.metadata.requesterMemberId).toBeUndefined();
-    expect(approval!.metadata.requesterIdentity?.identified).toBe(false);
+    expect(result.httpStatus).toBe(400);
+    expect(result.body.code).toBe("auth_link_requester_unresolved");
+    expect(result.body.reason).toBe("no_active_binding");
+    expect(result.body.approvalId).toBeFalsy();
   });
 });
 
@@ -880,6 +916,7 @@ describe("M2b: kind付きチケットでAUTHORITY OFF時も権限チェック強
     const created = await createPendingVoterBinding(input);
     if (!created.ok) throw new Error(created.reason);
     await verifyVoterBinding({ ...input, verificationCode: created.verificationCode });
+    await bindAuthLinkSpeaker("mem_1", { reset: false });
 
     const result = await withNeedsApprovalMailPolicy(() =>
       sendMailWithAuthLink({ to: "user@tokyo307inc.com", jobSuffix: "m2b_vote" })
@@ -1075,6 +1112,7 @@ describe("L: CC/BCC不正形式の申請拒否", () => {
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId: `job_malformed_cc_${Date.now()}`,
           args: {
             to: "user@tokyo307inc.com",
@@ -1099,6 +1137,7 @@ describe("L: CC/BCC不正形式の申請拒否", () => {
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId: `job_malformed_bcc_${Date.now()}`,
           args: {
             to: "user@tokyo307inc.com",
@@ -1145,6 +1184,7 @@ describe("L: createApproval失敗時は失敗を返す", () => {
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId: `job_create_fail_${Date.now()}`,
           args: {
             to: "user@tokyo307inc.com",
@@ -1190,6 +1230,7 @@ describe("H1: approvalId再実行で実際に送信し、atomic claimで1回の�
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId,
           args: {
             to: "user@tokyo307inc.com",
@@ -1221,6 +1262,7 @@ describe("H1: approvalId再実行で実際に送信し、atomic claimで1回の�
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId,
           approvalId,
           args: {
@@ -1254,6 +1296,7 @@ describe("H1: approvalId再実行で実際に送信し、atomic claimで1回の�
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId,
           args: {
             to: "user@tokyo307inc.com",
@@ -1276,6 +1319,7 @@ describe("H1: approvalId再実行で実際に送信し、atomic claimで1回の�
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId,
           approvalId,
           args: {
@@ -1297,6 +1341,7 @@ describe("H1: approvalId再実行で実際に送信し、atomic claimで1回の�
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId,
           approvalId,
           args: {
@@ -1341,6 +1386,7 @@ describe("H2: 再実行時にauth-linkポリシーの全4条件を再判定", ()
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId,
           args: {
             to: "user@tokyo307inc.com",
@@ -1362,6 +1408,7 @@ describe("H2: 再実行時にauth-linkポリシーの全4条件を再判定", ()
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId,
           approvalId,
           args: {
@@ -1399,6 +1446,7 @@ describe("H2: 再実行時にauth-linkポリシーの全4条件を再判定", ()
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId,
           args: {
             to: "user@tokyo307inc.com",
@@ -1422,6 +1470,7 @@ describe("H2: 再実行時にauth-linkポリシーの全4条件を再判定", ()
         body: {
           tool: "mail.send",
           purpose: "sales.outreach",
+          speakerId: AUTH_LINK_SPEAKER,
           jobId,
           approvalId,
           args: {

@@ -13,6 +13,10 @@ select security_test.denied($cmd$select public.claim_approval_execution(gen_rand
 select security_test.denied($cmd$select public.consume_admin_approval_secret(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),1)$cmd$);
 select security_test.denied($cmd$select public.merge_approval_metadata(gen_random_uuid(),gen_random_uuid(),'{}')$cmd$);
 select security_test.denied($cmd$select public.finish_approval_execution(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'failed')$cmd$);
+select security_test.denied($cmd$select public.claim_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
+select security_test.denied($cmd$select public.release_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job')$cmd$);
+select security_test.denied($cmd$select public.consume_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
+select security_test.denied($cmd$select public.mark_auth_link_send_uncertain(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
 reset role;
 set role authenticated;
 select security_test.denied($cmd$insert into public.approval_execution_claims values(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'running',now(),null)$cmd$);
@@ -20,6 +24,10 @@ select security_test.denied($cmd$select public.claim_approval_execution(gen_rand
 select security_test.denied($cmd$select public.consume_admin_approval_secret(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),1)$cmd$);
 select security_test.denied($cmd$select public.merge_approval_metadata(gen_random_uuid(),gen_random_uuid(),'{}')$cmd$);
 select security_test.denied($cmd$select public.finish_approval_execution(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'failed')$cmd$);
+select security_test.denied($cmd$select public.claim_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
+select security_test.denied($cmd$select public.release_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job')$cmd$);
+select security_test.denied($cmd$select public.consume_auth_link_send(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
+select security_test.denied($cmd$select public.mark_auth_link_send_uncertain(gen_random_uuid(),gen_random_uuid(),'job',now())$cmd$);
 reset role;
 set role service_role;
 -- Cross-tenant claim and metadata writes have no effect.
