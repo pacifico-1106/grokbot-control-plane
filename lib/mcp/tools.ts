@@ -32,6 +32,7 @@ import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { approvalNotSentInfo, notSentFulfillmentResult } from "@/lib/approvals/not-sent";
 import { handleDecisionRequest, type DecisionRequestInput } from "@/lib/decision-workflow";
 import { isApprovalReasonsEnabled, isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled, isTopicGatedPostingEnabled, isWhoamiCredentialInfoEnabled } from "@/lib/feature-flags";
+import { employeeOwnsApproval } from "@/lib/approvals/status-authz";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import type { OrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/types";
 import { categorizeSensitiveTopics } from "@/lib/approvals/sensitive-topic-categories";
@@ -786,7 +787,7 @@ export async function callStaffpassMcpTool(
         );
       }
       const approval = await getApprovalStatusByToken(approvalId, statusToken);
-      if (!approval) {
+      if (!approval || !employeeOwnsApproval(approval, cred)) {
         return toolResult(
           { ok: false, error: "not_found_or_invalid_token" },
           true

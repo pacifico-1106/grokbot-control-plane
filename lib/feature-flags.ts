@@ -1319,6 +1319,48 @@ export function isConfigChannelClassificationSurfaceGuardEnabledForOrg(
 }
 
 /**
+ * APPROVAL_STATUS_PUBLIC_MINIMAL_ENABLED (default OFF).
+ *
+ * GET /api/approvals/status is the unauthenticated bot pollUrl (id +
+ * statusToken). Existing callers (approval-loop runbook, MCP pollUrl,
+ * Web clipboard copy, e2e signed-poll) expect title / summary /
+ * fulfillment. Tightening that token-only payload would break them, so
+ * the strip sits behind this flag + _ORG_IDS.
+ *
+ * When ON (and org is in _ORG_IDS or the list is empty):
+ * - Token poll returns status only (ok / approvalId / status / pollHint).
+ * - title, summary, revisionNote, employeeId, fulfillment, workflow,
+ *   recipients, and other PII are omitted.
+ *
+ * When OFF (default): existing full token-poll payload.
+ *
+ * Employee MCP staffpass_get_approval_status is NOT gated: the caller
+ * must already match the ticket's org + requesting employee.
+ *
+ * _ORG_IDS: comma-separated org ids. Empty / unset → every org once the
+ * master flag is ON. Non-empty → only those orgs.
+ */
+export function isApprovalStatusPublicMinimalEnabled(): boolean {
+  return parseFlag(process.env.APPROVAL_STATUS_PUBLIC_MINIMAL_ENABLED);
+}
+
+export function approvalStatusPublicMinimalOrgIds(): string[] {
+  return (process.env.APPROVAL_STATUS_PUBLIC_MINIMAL_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isApprovalStatusPublicMinimalEnabledForOrg(
+  orgId: string | null | undefined
+): boolean {
+  if (!isApprovalStatusPublicMinimalEnabled()) return false;
+  if (!orgId) return false;
+  const list = approvalStatusPublicMinimalOrgIds();
+  return list.length === 0 || list.includes(orgId);
+}
+
+/**
  * MAIL_POLICY_INTERNAL_NOMATCH_APPROVAL_ENABLED (default OFF).
  *
  * evaluateForRecipient: audience=internal AND no rule matched AND the first
