@@ -43,6 +43,16 @@ async function status(query: string, member = "mem_1") {
   const res = await GET(new Request(`http://localhost/api/holds/status?${query}`, {
     headers: { "x-member-id": member },
   }));
+  return { status: res.status, cache: res.headers.get("cache-control"), cdn: res.headers.get("vercel-cdn-cache-control"), body: await res.json() as Record<string, unknown> };
+}
+
+async function statusPost(body: Record<string, unknown>, member = "mem_1") {
+  const { POST } = await import("@/app/api/holds/status/route");
+  const res = await POST(new Request("http://localhost/api/holds/status", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "http://localhost", "x-member-id": member },
+    body: JSON.stringify(body),
+  }));
   return { status: res.status, cache: res.headers.get("cache-control"), body: await res.json() as Record<string, unknown> };
 }
 
@@ -54,6 +64,19 @@ describe("GET /api/holds/status?scope=org", () => {
     expect(r.body.state).toBe("none");
     expect(r.body.orgEnabled).toBe(true);
     expect(String(r.cache || "")).toMatch(/no-store/);
+    expect(String(r.cdn || "")).toMatch(/no-store/);
+  });
+  test("POST scope=org after org stop is held (not a cacheable GET)", async () => {
+    const stop = await startHold({
+      orgId: ORG, employeeId: null,
+      actor: { type: "member", member: getRuntimeMemberById("mem_1")!, surface: "web", demoAuthTime: new Date().toISOString() },
+    });
+    expect(stop.ok).toBe(true);
+    if (!stop.ok) return;
+    const r = await statusPost({ scope: "org" });
+    expect(r.status).toBe(200);
+    expect(r.body.state).toBe("held");
+    expect((r.body.hold as { id?: string } | null)?.id).toBe(stop.holdId);
   });
   test("ops_console org stop → opsHold true (HoldPanel hides 解除を申請)", async () => {
     const stop = await startHold({

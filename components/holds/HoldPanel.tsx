@@ -7,53 +7,61 @@
  * /api/holds/release/approve を呼ぶ。Inbox buttons can only stop and link here.
  *
  * Display is fail-closed: an unreadable status never shows the stop button.
+ * /app must pass `initial` from the server (orgs.hold_state); a client GET
+ * that says "none" must not overwrite a held pointer (CDN / stale GET).
  */
 import { useCallback, useEffect, useState } from "react";
 import { RequiredReasonSubmit } from "@/components/holds/RequiredReasonSubmit";
 import { approvalDecideErrorJa } from "@/lib/approvals/hold-release-web";
-import { HOLD_DISPLAY_UNREADABLE_JA, holdDisplayMode } from "@/lib/safety/hold-display";
-
-type Status = {
-  ok: boolean;
-  enabled: boolean;
-  orgEnabled: boolean;
-  state: "none" | "held" | "unknown";
-  me: string;
-  hold: null | { id: string; kind: string; startedVia: string; startedAt: string; opsHold: boolean; releaseRequestedBy: string | null; releaseRequested: boolean };
-};
+import {
+  HOLD_DISPLAY_UNREADABLE_JA,
+  holdDisplayMode,
+  mergeHoldStatus,
+  type HoldPanelStatus,
+} from "@/lib/safety/hold-display";
 
 const KIND_JA: Record<string, string> = { stopped: "緊急停止中", leave: "休職中", quarantined: "隔離中（自動検知）" };
 
-export function HoldPanel({ employeeId, scope = "employee" }: { employeeId?: string; scope?: "employee" | "org" }) {
-  const [status, setStatus] = useState<Status | null>(null);
+export function HoldPanel({
+  employeeId, scope = "employee", initial = null,
+}: {
+  employeeId?: string;
+  scope?: "employee" | "org";
+  initial?: HoldPanelStatus | null;
+}) {
+  const [status, setStatus] = useState<HoldPanelStatus | null>(initial);
   const [loadFailed, setLoadFailed] = useState(false);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const query = scope === "org" ? "scope=org" : `employeeId=${encodeURIComponent(employeeId ?? "")}`;
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/holds/status?${query}`, { cache: "no-store" });
+      const res = await fetch("/api/holds/status", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(scope === "org" ? { scope: "org" } : { employeeId: employeeId ?? "" }),
+      });
       if (!res.ok) {
         setLoadFailed(true);
-        setStatus(null);
         return;
       }
+      const next = (await res.json()) as HoldPanelStatus;
       setLoadFailed(false);
-      setStatus((await res.json()) as Status);
+      setStatus((prev) => mergeHoldStatus(prev, next));
     } catch {
       setLoadFailed(true);
-      setStatus(null);
     }
-  }, [query]);
+  }, [employeeId, scope]);
   useEffect(() => { void load(); }, [load]);
 
   async function post(path: string, body: Record<string, unknown>, done: string) {
     setBusy(true);
     setMessage("");
     try {
-      const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const res = await fetch(path, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const json = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
       if (!res.ok) setMessage(approvalDecideErrorJa(json));
       else setMessage(done);
@@ -63,7 +71,7 @@ export function HoldPanel({ employeeId, scope = "employee" }: { employeeId?: str
     }
   }
 
-  const mode = holdDisplayMode(status, scope, loadFailed);
+  const mode = holdDisplayMode(status, scope, loadFailed && !status);
   if (mode === "loading" || mode === "hidden") return null;
   const target = scope === "org" ? { scope: "org" } : { employeeId };
   const h = status?.hold ?? null;

@@ -15,6 +15,9 @@ import {
   listAuditEvents,
   listEmployees,
 } from "@/lib/data";
+import { readHoldForDisplay } from "@/lib/safety/hold-actions";
+import { isEmployeeHoldEnabled, isOrgHoldEnabled } from "@/lib/safety/hold-config";
+import { buildHoldPanelStatus } from "@/lib/safety/hold-display";
 import { isDemoMode } from "@/lib/mode";
 import { buildConcentration } from "@/lib/employees/concentration";
 import { orgNeedsSetup } from "@/lib/dashboard/setup-state";
@@ -27,6 +30,7 @@ export default async function DashboardPage() {
   const orgId = session.orgId;
   const canIssueAdminCredential = session.demo || canIssueEmployeeCredentials(session.member);
   const org = await getOrgMeta(orgId);
+  const orgHold = await readHoldForDisplay(orgId ?? "", null);
   const employees = ((await listEmployees(orgId)) ?? []).filter((e) => e.orgId === orgId);
   // 木村 2026-10-12: 「稼働中」 = active with a current, unexpired 社員証 (expires_at only).
   const statusViews = employees.map((e) => employeeStatusView(e));
@@ -61,7 +65,15 @@ export default async function DashboardPage() {
       title="変更ログ"
       subtitle={`${org.name} · トライアル中`}
     >
-      <HoldPanel scope="org" />
+      <HoldPanel
+        scope="org"
+        initial={buildHoldPanelStatus({
+          enabled: isEmployeeHoldEnabled(),
+          orgEnabled: isOrgHoldEnabled(),
+          memberId: session.member?.id ?? "",
+          read: orgHold,
+        })}
+      />
       {needsSetup ? (
         <SetupKickoff
           adminConnected={adminConnected}

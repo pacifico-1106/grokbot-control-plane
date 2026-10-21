@@ -467,6 +467,20 @@ describe("org hold display uses the live pointer (same as MCP), fail-closed", ()
       hold.__setHoldReaderForTests(null);
     }
   });
+  test("release request uses getHold(id), so a display/getOpenHold miss does not block 解除を申請", async () => {
+    process.env.ORG_HOLD_ENABLED = "true";
+    const r = await actions.startHold({ orgId: ORG, employeeId: null, actor: web(owner()) });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const real = store.getHoldStore();
+    store.__setHoldStoreForTests({ ...real, getOpenHold: async () => null });
+    try {
+      const req = await actions.requestHoldRelease({ orgId: ORG, holdId: r.holdId, reason: "誤って組織全体を停止したため解除", actor: web(owner()) });
+      expect(req.ok).toBe(true);
+    } finally {
+      store.__setHoldStoreForTests(null);
+    }
+  });
   test("org release still needs fresh login and a second person (rules not loosened)", async () => {
     process.env.ORG_HOLD_ENABLED = "true";
     const r = await actions.startHold({ orgId: ORG, employeeId: null, actor: web(owner()) });
