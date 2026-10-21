@@ -57,8 +57,10 @@ export const LINE_APPROVER_LINK_GROUP_JA = LINE_CONVERSATION_LINK_GROUP_JA;
 export const LINE_APPROVER_LINK_ERROR_JA = LINE_APPROVER_LINK_ERROR_LEGACY_JA;
 
 export const LINE_WEB_ONLY_APPROVE_PATH = "/app/approvals";
-export const LINE_WEB_ONLY_APPROVE_JA =
-  "高リスクの操作は、パスキーが入るまで LINE では承認できません。Web で承認してください（/app/approvals）。";
+export function LINE_WEB_ONLY_APPROVE_JA_OF(approvalsUrl: string): string {
+  return `高リスクの操作は、パスキーが入るまで LINE では承認できません。Web で承認してください。${approvalsUrl}`;
+}
+export const LINE_WEB_ONLY_APPROVE_JA = LINE_WEB_ONLY_APPROVE_JA_OF(LINE_WEB_ONLY_APPROVE_PATH);
 
 /**
  * QTA-04 / U-21: 80% monthly-quota notice. L0 records the copy only;

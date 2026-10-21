@@ -45,11 +45,12 @@ import {
   LINE_APPROVER_LINK_GROUP_JA,
   LINE_APPROVER_LINK_INVALID_JA,
   LINE_APPROVER_LINK_OK_JA,
-  LINE_WEB_ONLY_APPROVE_JA,
+  LINE_WEB_ONLY_APPROVE_JA_OF,
   LINE_WEB_ONLY_APPROVE_PATH,
 } from "@/lib/comm/line-poc-copy";
 import { lineWebOnlyHighRiskVerdict } from "@/lib/comm/line-web-only-high-risk";
 import { isLineLinkCodeLimitsEnabled } from "@/lib/line/link-code-limits";
+import { getAppOrigin } from "@/lib/approvals/tokens";
 
 export type LineApprovalSource = { type?: string; userId?: string; groupId?: string; roomId?: string };
 export type LineApprovalEvent = {
@@ -224,7 +225,11 @@ async function handlePostback(channel: NotificationChannelRuntime, event: LineAp
           webPath: LINE_WEB_ONLY_APPROVE_PATH,
         },
       }).catch(() => undefined);
-      await reply(channel, event, LINE_WEB_ONLY_APPROVE_JA);
+      await reply(
+        channel,
+        event,
+        LINE_WEB_ONLY_APPROVE_JA_OF(`${getAppOrigin()}${LINE_WEB_ONLY_APPROVE_PATH}`)
+      );
       return;
     }
   }

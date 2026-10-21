@@ -39,7 +39,8 @@ describe("LINE web-only high-risk (until passkeys)", () => {
   test("LINE postback and workflow refuse before approve", () => {
     const events = readFileSync(join(process.cwd(), "lib/line/approval-events.ts"), "utf8");
     expect(events).toContain("lineWebOnlyHighRiskVerdict");
-    expect(events).toContain("LINE_WEB_ONLY_APPROVE_JA");
+    expect(events).toContain("LINE_WEB_ONLY_APPROVE_JA_OF");
+    expect(events).toContain("getAppOrigin");
     expect(events).toContain("line.web_only_refused");
     const wf = readFileSync(join(process.cwd(), "lib/approvals/workflow-integration.ts"), "utf8");
     expect(wf).toContain("lineWebOnlyHighRiskVerdict");

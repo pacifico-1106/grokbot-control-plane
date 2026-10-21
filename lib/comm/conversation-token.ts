@@ -16,14 +16,19 @@
  *     token leaked to another tenant or another AI employee is useless.
  *
  * Format: spc1.<base64url(JSON payload)>.<base64url(HMAC-SHA256)>. Key
- * COMM_CONVERSATION_TOKEN_SECRET (≥ 32 chars; missing → fail closed);
- * COMM_CONVERSATION_TOKEN_SECRET_PREVIOUS is accepted for verify only (rotation).
+ * COMM_CONVERSATION_TOKEN_SECRET: trim 後の文字列長 ≥ 32（デコードしたバイト数は見ない）。
+ * 32 ASCII 文字（32 バイト）で足りる。hex で 32 バイトを入れるなら 64 文字、
+ * standard/base64url なら約 44 文字。未設定・短すぎ → fail closed
+ * （発行しない / 受け取らない / wake しない）。
+ * COMM_CONVERSATION_TOKEN_SECRET_PREVIOUS は verify 用の任意キー（未設定でよい）。
  * Not encrypted: the payload holds IDs the AI already sees in the wake.
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const CONVERSATION_TOKEN_DEFAULT_TTL_SECONDS = 24 * 3600;
 export const CONVERSATION_TOKEN_MAX_TTL_SECONDS = 7 * 24 * 3600;
+/** Min length of COMM_CONVERSATION_TOKEN_SECRET after trim (characters, not decoded bytes). */
+export const CONVERSATION_TOKEN_SECRET_MIN_CHARS = 32;
 /** clock skew tolerated for iat between server instances */
 const IAT_SKEW_MS = 60_000;
 const MAX_TOKEN_LENGTH = 2048;
@@ -51,9 +56,9 @@ const REPLY_TOKEN_RE = /^[A-Za-z0-9_-]{1,256}$/;
 
 function keys(): { current: string; previous: string | null } | null {
   const current = process.env.COMM_CONVERSATION_TOKEN_SECRET?.trim() || "";
-  if (current.length < 32) return null;
+  if (current.length < CONVERSATION_TOKEN_SECRET_MIN_CHARS) return null;
   const prev = process.env.COMM_CONVERSATION_TOKEN_SECRET_PREVIOUS?.trim() || "";
-  return { current, previous: prev.length >= 32 ? prev : null };
+  return { current, previous: prev.length >= CONVERSATION_TOKEN_SECRET_MIN_CHARS ? prev : null };
 }
 
 function sign(key: string, payloadB64: string): Buffer {

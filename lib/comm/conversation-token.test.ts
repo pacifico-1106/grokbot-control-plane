@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
 import {
   CONVERSATION_TOKEN_MAX_TTL_SECONDS,
+  CONVERSATION_TOKEN_SECRET_MIN_CHARS,
   issueConversationToken,
   resolveConversationTarget,
   verifyConversationToken,
@@ -97,7 +98,20 @@ describe("conversation token (H2–H4)", () => {
     delete process.env[KEY];
     expect(issueConversationToken(base, NOW)).toEqual({ ok: false, reason: "conversation_token_key_missing" });
     expect(verifyConversationToken(t, who, NOW)).toEqual({ ok: false, reason: "conversation_token_key_missing" });
-    process.env[KEY] = "c".repeat(32);
+    process.env[KEY] = "c".repeat(CONVERSATION_TOKEN_SECRET_MIN_CHARS);
+    expect(issueConversationToken(base, NOW).ok).toBe(true);
+    delete process.env[PREV];
+    expect(issueConversationToken(base, NOW).ok).toBe(true);
+  });
+
+  test("32-byte secret as hex (64 chars) or base64 (~44 chars) is accepted; PREVIOUS unset is ok", () => {
+    expect(CONVERSATION_TOKEN_SECRET_MIN_CHARS).toBe(32);
+    const bytes = Buffer.alloc(32, 7);
+    process.env[KEY] = bytes.toString("hex");
+    expect(process.env[KEY]!.length).toBe(64);
+    expect(issueConversationToken(base, NOW).ok).toBe(true);
+    process.env[KEY] = bytes.toString("base64");
+    expect(process.env[KEY]!.length).toBeGreaterThanOrEqual(CONVERSATION_TOKEN_SECRET_MIN_CHARS);
     expect(issueConversationToken(base, NOW).ok).toBe(true);
     delete process.env[PREV];
     expect(issueConversationToken(base, NOW).ok).toBe(true);
