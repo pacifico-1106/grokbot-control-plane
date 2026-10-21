@@ -67,6 +67,12 @@ import {
   lineWaiveExternalDeny,
 } from "@/lib/comm/line-invoke";
 import { isLineConversationEnabled } from "@/lib/comm/flags";
+import {
+  declaredConversationSurface,
+  isDeliveryUnsupportedSurfaceEnabled,
+  unsupportedSurfaceDeliveryVerdict,
+  verifiedLineConversationException,
+} from "@/lib/comm/unsupported-surface";
 import { approvalTicketPolicyMetadata } from "@/lib/comm/line-web-only-high-risk";
 import { conversationTokenCounterparty, conversationTokenFromRequest } from "@/lib/comm/conversation-token";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
@@ -1508,8 +1514,51 @@ async function runGatewayInvokeInner(
   if (isAudienceGatedTool(toolDef) && !priorApprovalOk) {
     const preCtx = parseConversationContext(body, principalOrgId);
     const preArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
-    const preSlack = preCtx?.surface === "slack" || Boolean(preCtx?.slackChannelId) || Boolean(preCtx?.slackUserId);
     const preLine = isLineConversationRequest(preCtx, body, orgId || employee.orgId);
+    if (isDeliveryUnsupportedSurfaceEnabled(orgId || employee.orgId)) {
+      const declared = declaredConversationSurface(body);
+      const lineException = await verifiedLineConversationException({
+        body,
+        orgId: orgId || employee.orgId,
+        employeeId,
+      });
+      const verdict = unsupportedSurfaceDeliveryVerdict({
+        surface: declared,
+        lineConversation: lineException,
+      });
+      if (verdict.refuse) {
+        const info = channelNotSupportedInfo(verdict.surface);
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "comm.not_sent",
+          purpose,
+          summary: `${tool} を送信していません（送信先の窓口に未対応・承認申請前に停止）`,
+          metadata: { tool, jobId, code: info.code, surface: info.surface, sent: false, phase: "before_approval" },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: info.code,
+            error: info.code,
+            sent: false,
+            surface: info.surface,
+            message: info.messageJa,
+            nextStep: info.nextStep,
+            retryable: false,
+            nextAction: "stop",
+            needs_approval: false,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          409
+        );
+      }
+    }
+    const preSlack = preCtx?.surface === "slack" || Boolean(preCtx?.slackChannelId) || Boolean(preCtx?.slackUserId);
     if (!preSlack && !preLine) {
       const info = channelNotSupportedInfo(preCtx?.surface ?? null);
       await appendAuditEvent({
