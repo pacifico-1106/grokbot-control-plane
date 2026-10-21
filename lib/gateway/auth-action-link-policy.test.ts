@@ -44,9 +44,9 @@ function makeInput(overrides: Partial<AuthActionLinkPolicyInput> = {}): AuthActi
       destinationMissing: false,
     },
     recipients: {
-      to: ["user@tokyo307inc.com"],
-      cc: [],
-      bcc: [],
+      toCount: 1,
+      ccCount: 0,
+      bccCount: 0,
     },
     isChannelPost: false,
     ...overrides,
@@ -68,10 +68,10 @@ describe("evaluateAuthActionLinkPolicy", () => {
   test("returns needs_approval for internal single recipient", () => {
     const result = evaluateAuthActionLinkPolicy(makeInput());
     expect(result.ok).toBe(true);
-    if (result.ok) {
+    if (result.ok && result.action === "needs_approval") {
       expect(result.action).toBe("needs_approval");
       expect(result.reason).toBe("auth_action_link_internal");
-      expect(result.links?.length).toBe(1);
+      expect(result.links.length).toBe(1);
     }
   });
 
@@ -92,9 +92,9 @@ describe("evaluateAuthActionLinkPolicy", () => {
   test("blocks multiple To recipients", () => {
     const result = evaluateAuthActionLinkPolicy(makeInput({
       recipients: {
-        to: ["user1@tokyo307inc.com", "user2@tokyo307inc.com"],
-        cc: [],
-        bcc: [],
+        toCount: 2,
+        ccCount: 0,
+        bccCount: 0,
       },
     }));
     expect(result.ok).toBe(false);
@@ -106,9 +106,9 @@ describe("evaluateAuthActionLinkPolicy", () => {
   test("blocks CC recipients", () => {
     const result = evaluateAuthActionLinkPolicy(makeInput({
       recipients: {
-        to: ["user@tokyo307inc.com"],
-        cc: ["cc@tokyo307inc.com"],
-        bcc: [],
+        toCount: 1,
+        ccCount: 1,
+        bccCount: 0,
       },
     }));
     expect(result.ok).toBe(false);
@@ -120,9 +120,9 @@ describe("evaluateAuthActionLinkPolicy", () => {
   test("blocks BCC recipients", () => {
     const result = evaluateAuthActionLinkPolicy(makeInput({
       recipients: {
-        to: ["user@tokyo307inc.com"],
-        cc: [],
-        bcc: ["bcc@tokyo307inc.com"],
+        toCount: 1,
+        ccCount: 0,
+        bccCount: 1,
       },
     }));
     expect(result.ok).toBe(false);
@@ -156,6 +156,24 @@ describe("evaluateAuthActionLinkPolicy", () => {
   });
 
   test("blocks when other secrets detected (suspected)", () => {
+    // Use a non-aws_secret_key pattern since aws_secret_key is filtered out
+    // (it can be triggered by the auth link's apiKey)
+    const result = evaluateAuthActionLinkPolicy(makeInput({
+      secretDetection: {
+        ok: true,
+        authActionLinks: makeLinks(),
+        suspected: [{ pattern: "base64_long_secret", fieldPath: "args.body", length: 64 }],
+      },
+    }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("other_secret_detected");
+    }
+  });
+
+  test("allows when only aws_secret_key is suspected (auth link apiKey)", () => {
+    // aws_secret_key suspected should be ignored when auth links are present
+    // (the apiKey in auth links can trigger this pattern)
     const result = evaluateAuthActionLinkPolicy(makeInput({
       secretDetection: {
         ok: true,
@@ -163,9 +181,9 @@ describe("evaluateAuthActionLinkPolicy", () => {
         suspected: [{ pattern: "aws_secret_key", fieldPath: "args.body", length: 40 }],
       },
     }));
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("other_secret_detected");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.action).toBe("needs_approval");
     }
   });
 

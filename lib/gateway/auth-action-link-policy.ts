@@ -49,9 +49,12 @@ export type AuthActionLinkPolicyInput = {
     destinationMissing: boolean;
   };
   recipients: {
-    to: string[];
-    cc: string[];
-    bcc: string[];
+    /** Parsed recipient count for To field */
+    toCount: number;
+    /** Parsed recipient count for CC field */
+    ccCount: number;
+    /** Parsed recipient count for BCC field */
+    bccCount: number;
   };
   isChannelPost: boolean;
 };
@@ -79,8 +82,16 @@ export function evaluateAuthActionLinkPolicy(
     return allow("no_auth_links");
   }
 
+  // Check for OTHER secrets (not from the auth link's apiKey).
+  // The aws_secret_key pattern can match the apiKey parameter (40 chars alphanumeric),
+  // so we ignore aws_secret_key suspected when auth links are present.
   if (input.secretDetection.ok && input.secretDetection.suspected && input.secretDetection.suspected.length > 0) {
-    return blocked("other_secret_detected");
+    const otherSecrets = input.secretDetection.suspected.filter(
+      (s) => s.pattern !== "aws_secret_key"
+    );
+    if (otherSecrets.length > 0) {
+      return blocked("other_secret_detected");
+    }
   }
 
   if (input.isChannelPost) {
@@ -95,11 +106,11 @@ export function evaluateAuthActionLinkPolicy(
     return blocked("external_recipient");
   }
 
-  if (input.recipients.to.length !== 1) {
+  if (input.recipients.toCount !== 1) {
     return blocked("multiple_recipients");
   }
 
-  if (input.recipients.cc.length > 0 || input.recipients.bcc.length > 0) {
+  if (input.recipients.ccCount > 0 || input.recipients.bccCount > 0) {
     return blocked("has_cc_or_bcc");
   }
 

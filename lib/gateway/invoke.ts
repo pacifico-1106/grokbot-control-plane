@@ -32,7 +32,7 @@ import {
   updateApprovalMetadata,
 } from "@/lib/data";
 import { evaluateMailPolicyForRequest } from "@/lib/mail-policy/evaluate-request";
-import { collectMailToRecipients, extractMailRecipients } from "@/lib/mail-policy/apply";
+import { collectMailToRecipients, extractMailRecipients, parseMailRecipientList } from "@/lib/mail-policy/apply";
 import { buildMailSendPin, checkApprovedMailSendPin } from "@/lib/mail-policy/approved-send-pin";
 import type { MailPolicyDecision } from "@/lib/types";
 import {
@@ -161,6 +161,7 @@ import {
 import {
   detectSecretInPayload,
   buildSecretDetectionErrorResponse,
+  type DetectedAuthActionLink,
 } from "@/lib/security/secret-detector";
 import { omitMailAttachmentBinary } from "@/lib/mail/omit-binary";
 import { prepareMailSend } from "@/lib/mail/prepare";
@@ -174,8 +175,15 @@ import {
   isTopicGatedPostingEnabled,
   isApprovalReasonsEnabled,
   isCommSendInternalDefaultEnabled,
+  isSecretAuthActionLinkEnabledForOrg,
 } from "@/lib/feature-flags";
 import { checkTopicGate, buildTopicGateApprovalMetadata } from "@/lib/decision-workflow/topic-gate";
+import {
+  evaluateAuthActionLinkPolicy,
+  buildAuthActionLinkApprovalSummary,
+  buildAuthActionLinkArtifactLines,
+  type AuthActionLinkPolicyResult,
+} from "@/lib/gateway/auth-action-link-policy";
 import { getOrgChannel } from "@/lib/data/directory";
 import { buildApprovalReasons, toAiFacingApprovalReasons, topicGateMessageJaForAi, type AiApprovalReason, type ApprovalReason } from "@/lib/approvals/approval-reasons";
 import { categorizeMatchedTopics } from "@/lib/approvals/sensitive-topic-categories";
@@ -898,6 +906,11 @@ async function runGatewayInvokeInner(
     await auditSecretDetectionSuspected(scope, secretDetection.suspected ?? []);
   }
 
+  // Store auth action links for later policy evaluation (FLAG ON only).
+  // SECURITY: oobCode/apiKey values are NEVER stored here - only metadata.
+  const detectedAuthLinks: DetectedAuthActionLink[] | undefined =
+    secretDetection.ok ? secretDetection.authActionLinks : undefined;
+
   const resolved = resolveGatewayTool(toolRaw);
   if (!resolved.ok) {
     return jsonResult(
@@ -1032,6 +1045,47 @@ async function runGatewayInvokeInner(
         jobId,
       },
       403
+    );
+  }
+
+  // AUTH_ACTION_LINK: block non-mail tools (channel posts, etc.) with auth links.
+  // SECURITY: oobCode/apiKey values are NEVER logged or returned in errors.
+  if (
+    detectedAuthLinks &&
+    detectedAuthLinks.length > 0 &&
+    tool !== "mail.send" &&
+    isSecretAuthActionLinkEnabledForOrg(orgId)
+  ) {
+    await appendAuditEvent({
+      orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.auth_action_link_blocked",
+      purpose,
+      summary: `${tool} を認証リンク（channel_post）でブロック`,
+      metadata: {
+        tool,
+        jobId,
+        code: "auth_action_link_blocked",
+        reason: "channel_post",
+        linkCount: detectedAuthLinks.length,
+      },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "auth_action_link_blocked",
+        error: "auth_action_link_blocked",
+        reason: "channel_post",
+        message: "認証リンクをチャンネルに投稿することはできません。",
+        messageJa: "認証リンクをチャンネルに投稿することはできません。",
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      400
     );
   }
 
@@ -1885,6 +1939,50 @@ async function runGatewayInvokeInner(
     }
   }
 
+  // AUTH_ACTION_LINK: for mail.send with auth links and external recipients,
+  // block with specific code before general egress denial.
+  // SECURITY: oobCode/apiKey values are NEVER logged or returned.
+  if (
+    detectedAuthLinks &&
+    detectedAuthLinks.length > 0 &&
+    tool === "mail.send" &&
+    isSecretAuthActionLinkEnabledForOrg(orgId) &&
+    egress?.decision === "deny" &&
+    egress?.audience === "external"
+  ) {
+    await appendAuditEvent({
+      orgId,
+      employeeId,
+      credentialId: input.credentialId || employee.credentialId,
+      action: "gateway.auth_action_link_blocked",
+      purpose,
+      summary: `${tool} を認証リンク（external_recipient）でブロック`,
+      metadata: {
+        tool,
+        jobId,
+        code: "auth_action_link_blocked",
+        reason: "external_recipient",
+        linkCount: detectedAuthLinks.length,
+      },
+    }).catch(() => undefined);
+    return jsonResult(
+      {
+        ok: false,
+        code: "auth_action_link_blocked",
+        error: "auth_action_link_blocked",
+        reason: "external_recipient",
+        message: "認証リンクを社外に送信することはできません。",
+        messageJa: "認証リンクを社外に送信することはできません。",
+        needs_approval: false,
+        employeeId,
+        tool,
+        purpose,
+        jobId,
+      },
+      400
+    );
+  }
+
   // Deny wins over SoD queue: confidential-to-external must not become a pending ticket.
   if (egress?.decision === "deny") {
     await appendAuditEvent({
@@ -2406,6 +2504,175 @@ async function runGatewayInvokeInner(
       body,
     });
     mailPolicyDecision = mailEval.decision;
+
+    // AUTH_ACTION_LINK: special handling for Firebase auth links in mail.send.
+    // SECURITY: oobCode/apiKey values are NEVER logged or returned in errors.
+    if (
+      detectedAuthLinks &&
+      detectedAuthLinks.length > 0 &&
+      isSecretAuthActionLinkEnabledForOrg(orgId)
+    ) {
+      const toInfo = collectMailToRecipients(body);
+      const recipients = extractMailRecipients(body);
+      const parsedTo = parseMailRecipientList(toInfo.to);
+      const parsedCc = recipients.cc.flatMap((c) => parseMailRecipientList(c).recipients);
+      const parsedBcc = recipients.bcc.flatMap((b) => parseMailRecipientList(b).recipients);
+      const authLinkPolicy = evaluateAuthActionLinkPolicy({
+        orgId,
+        secretDetection,
+        audience: {
+          effectiveAudience: mailPolicyDecision.audience === "internal" ? "internal" : "external",
+          namedRecipients: parsedTo.recipients.length > 0,
+          destinationMissing: parsedTo.recipients.length === 0,
+        },
+        recipients: {
+          toCount: parsedTo.recipients.length,
+          ccCount: parsedCc.length,
+          bccCount: parsedBcc.length,
+        },
+        isChannelPost: false,
+      });
+
+      if (!authLinkPolicy.ok) {
+        await appendAuditEvent({
+          orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "gateway.auth_action_link_blocked",
+          purpose,
+          summary: `${tool} を認証リンク（${authLinkPolicy.reason}）でブロック`,
+          metadata: {
+            tool,
+            jobId,
+            code: authLinkPolicy.code,
+            reason: authLinkPolicy.reason,
+            linkCount: detectedAuthLinks.length,
+          },
+        }).catch(() => undefined);
+        return jsonResult(
+          {
+            ok: false,
+            code: authLinkPolicy.code,
+            error: authLinkPolicy.code,
+            reason: authLinkPolicy.reason,
+            message: authLinkPolicy.messageJa,
+            messageJa: authLinkPolicy.messageJa,
+            needs_approval: false,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          400
+        );
+      }
+
+      // Auth link allowed: create approval with masked summary and always_human.
+      // SECURITY: oobCode/apiKey values are NEVER included in summary.
+      if (authLinkPolicy.action === "needs_approval") {
+        const recipientEmail = toInfo.sources[0] || "不明";
+        const mode = authLinkPolicy.links[0]?.mode || "resetPassword";
+        const authLinkSummary = buildAuthActionLinkApprovalSummary(recipientEmail, mode);
+        const authLinkArtifactLines = buildAuthActionLinkArtifactLines(recipientEmail, authLinkPolicy.links);
+        const authLinkTitle = `承認依頼: 認証リンク送信（${purpose}）`;
+
+        try {
+          const created = await createApproval({
+            orgId,
+            employeeId,
+            credentialId: input.credentialId || employee.credentialId,
+            title: authLinkTitle,
+            purpose,
+            summary: authLinkSummary,
+            risk: "high",
+            tool,
+            jobId,
+            parentApprovalId: parentApprovalId || null,
+            metadata: {
+              artifact: {
+                lines: authLinkArtifactLines,
+              },
+              invoke: buildInvokeSnapshot({
+                orgId,
+                employeeId,
+                tool,
+                purpose,
+                jobId,
+                args: body.args || {},
+                conversation: body.conversation as ConversationContext | null | undefined,
+              }),
+              always_human: true,
+              authActionLink: true,
+              managerId: managerId || undefined,
+              mailSendPin: body ? buildMailSendPin(body) : undefined,
+            },
+          });
+
+          // Best-effort human notify
+          const notifyTo =
+            process.env.BILLING_NOTIFY_EMAIL ||
+            process.env.APPROVAL_NOTIFY_EMAIL ||
+            "owner@example.com";
+          void sendApprovalNeededEmail(notifyTo, authLinkSummary, "high", {
+            kind: tool,
+            id: created.approval.id,
+          }).catch(() => null);
+          const channelNotifications = await sendApprovalNotifications(created.approval, employee).catch(
+            (error) => [{
+              ok: false,
+              provider: "unknown" as const,
+              error: error instanceof Error ? error.message : "channel_notify_failed",
+            }]
+          );
+
+          return jsonResult(
+            {
+              ok: false,
+              code: "auth_action_link_needs_approval",
+              error: "auth_action_link_needs_approval",
+              message: authLinkSummary,
+              needs_approval: true,
+              approvalId: created.approval.id,
+              statusToken: created.statusToken,
+              pollUrl: created.pollUrl,
+              pollPath: created.approval.pollPath,
+              pollHint: "continue_polling",
+              title: authLinkTitle,
+              summary: authLinkSummary,
+              risk: "high",
+              employeeId,
+              tool,
+              purpose,
+              jobId,
+              demoStore: created.demoStore ?? undefined,
+              telegramNotified: channelNotifications.some(
+                (result) => result.provider === "telegram" && result.ok
+              ),
+              notificationResults: channelNotifications,
+            },
+            402
+          );
+        } catch (e) {
+          const errMsg = e instanceof Error ? e.message : "approval_create_failed";
+          return jsonResult(
+            {
+              ok: false,
+              code: "auth_action_link_needs_approval",
+              error: "auth_action_link_needs_approval",
+              message: authLinkSummary,
+              needs_approval: true,
+              approvalCreateError: errMsg,
+              employeeId,
+              tool,
+              purpose,
+              jobId,
+              pollHint: "continue_polling",
+            },
+            402
+          );
+        }
+      }
+    }
 
     if (mailPolicyDecision.rejected) {
       await appendAuditEvent({
