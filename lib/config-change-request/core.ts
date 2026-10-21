@@ -168,18 +168,19 @@ export function parseConfigChangeInput(
     return {
       ok: false,
       code: "kind_required",
-      messageJa: `kind が必要です（${CONFIG_CHANGE_KINDS.join(" | ")}）`,
+      messageJa: `kind が必要です（${PUBLIC_CONFIG_CHANGE_KINDS.join(" | ")}）`,
     };
   }
   if (isBlockedSettingKind(rawKind)) {
     return { ok: false, code: "blocked_setting", messageJa: BLOCKED_SETTING_MESSAGE_JA };
   }
   const kind = normalizeKindToken(rawKind) as ConfigChangeKind;
-  if (!(CONFIG_CHANGE_KINDS as readonly string[]).includes(kind)) {
+  // L: party_audience is internal-only; public API only accepts public kinds
+  if (!(PUBLIC_CONFIG_CHANGE_KINDS as readonly string[]).includes(kind)) {
     return {
       ok: false,
       code: "unsupported_kind",
-      messageJa: `この種類の変更依頼には対応していません（対応: ${CONFIG_CHANGE_KINDS.join(" | ")}）。管理画面から人が変更してください。`,
+      messageJa: `この種類の変更依頼には対応していません（対応: ${PUBLIC_CONFIG_CHANGE_KINDS.join(" | ")}）。管理画面から人が変更してください。`,
     };
   }
   const jobId = str(args.jobId ?? args.job_id, 200);

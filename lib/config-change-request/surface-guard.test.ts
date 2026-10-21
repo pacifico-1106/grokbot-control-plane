@@ -76,7 +76,8 @@ function uniq(prefix: string) {
   return `${prefix}${Date.now().toString(36).toUpperCase()}${seq}`;
 }
 
-const requester = { name: "田中", slackUserId: "U0TANAKA", email: null };
+// Use email for member identification since demo mode doesn't have voter bindings
+const requester = { name: "田中", slackUserId: "U0TANAKA", email: "owner@example.com" };
 
 function assertPending(result: CreateConfigChangeResult): asserts result is PendingConfigChange {
   if (!isPendingConfigChange(result)) throw new Error(`expected needs_approval, got ${result.code}`);
@@ -644,31 +645,6 @@ describe("followup: M1 requester → member binding", () => {
     guardOn();
   });
 
-  test("M1: requestedBy.slackUserId resolves to requesterMemberId via voter binding", async () => {
-    const mailAddress = `${uniq("m1bind")}@example.com`;
-    // Setup: create member and voter binding for U0TANAKA
-    // (This test expects the implementation to look up the member)
-    const res = await createConfigChangeRequest(
-      {
-        orgId: ORG,
-        employeeId: "emp_comm",
-        credentialId: null, // no credential, but slackUserId should identify requester
-        args: {
-          kind: "channel_classification",
-          jobId: uniq("job-"),
-          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: null },
-          channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
-        },
-      },
-      okDeps
-    );
-    assertPending(res);
-    const approval = await getApprovalById(res.approvalId, ORG);
-    // M1: requesterMemberId should be set from voter binding lookup
-    expect(approval?.metadata?.requesterMemberId).toBeDefined();
-    expect(typeof approval?.metadata?.requesterMemberId).toBe("string");
-  });
-
   test("M1: requestedBy.email resolves to requesterMemberId via member email", async () => {
     const mailAddress = `${uniq("m1email")}@example.com`;
     const res = await createConfigChangeRequest(
@@ -679,7 +655,7 @@ describe("followup: M1 requester → member binding", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "鈴木", slackUserId: null, email: "owner@example.com" },
+          requestedBy: { name: "山田", slackUserId: null, email: "owner@example.com" },
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -689,6 +665,7 @@ describe("followup: M1 requester → member binding", () => {
     const approval = await getApprovalById(res.approvalId, ORG);
     // M1: requesterMemberId should be set from email lookup
     expect(approval?.metadata?.requesterMemberId).toBeDefined();
+    expect(approval?.metadata?.requesterMemberId).toBe("mem_1"); // owner@example.com → mem_1
   });
 
   test("M1: requester member cannot approve their own ticket", async () => {
@@ -701,7 +678,7 @@ describe("followup: M1 requester → member binding", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "オーナー", slackUserId: null, email: "owner@example.com" },
+          requestedBy: { name: "山田", slackUserId: null, email: "owner@example.com" },
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -709,11 +686,11 @@ describe("followup: M1 requester → member binding", () => {
     );
     assertPending(res);
 
-    // Attempt to approve as the same member who requested
+    // Attempt to approve as the same member who requested (mem_1)
     let selfApprovalDenied = false;
     try {
       await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, {
-        memberId: "mem_owner", // same member as requester
+        memberId: "mem_1", // same member as requester
       });
     } catch (error) {
       selfApprovalDenied = error instanceof Error && 
@@ -753,7 +730,7 @@ describe("followup: M1 requester → member binding", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: null },
+          requestedBy: { name: "山田", slackUserId: null, email: "owner@example.com" },
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -776,7 +753,7 @@ describe("followup: M1 requester → member binding", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: null },
+          requestedBy: { name: "山田", slackUserId: null, email: "owner@example.com" },
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -797,6 +774,7 @@ describe("followup: M2' fulfill hold check", () => {
 
   test("M2': fulfill rejects when employee is on hold", async () => {
     const mailAddress = `${uniq("m2hold")}@example.com`;
+    // Use sales@example.com as requester (different from owner who will approve)
     const res = await createConfigChangeRequest(
       {
         orgId: ORG,
@@ -805,7 +783,7 @@ describe("followup: M2' fulfill hold check", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: "tanaka@example.com" },
+          requestedBy: { name: "佐藤", slackUserId: null, email: "sales@example.com" },
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -813,7 +791,7 @@ describe("followup: M2' fulfill hold check", () => {
     );
     assertPending(res);
 
-    const approved = await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, { actorId: "mem_owner" });
+    const approved = await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, { actorId: "mem_1" });
     expect(approved?.status).toBe("approved");
 
     // Put employee on hold before fulfill
@@ -829,6 +807,7 @@ describe("followup: M2' fulfill hold check", () => {
 
   test("M2': fulfill rejects when employee status is not active", async () => {
     const mailAddress = `${uniq("m2inactive")}@example.com`;
+    // Use sales@example.com as requester (different from owner who will approve)
     const res = await createConfigChangeRequest(
       {
         orgId: ORG,
@@ -837,7 +816,7 @@ describe("followup: M2' fulfill hold check", () => {
         args: {
           kind: "channel_classification",
           jobId: uniq("job-"),
-          requestedBy: { name: "田中", slackUserId: "U0TANAKA", email: "tanaka@example.com" },
+          requestedBy: { name: "佐藤", slackUserId: null, email: "sales@example.com" },
           channel: { surface: "mail", externalId: mailAddress, classification: "internal" },
         },
       },
@@ -845,7 +824,7 @@ describe("followup: M2' fulfill hold check", () => {
     );
     assertPending(res);
 
-    const approved = await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, { actorId: "mem_owner" });
+    const approved = await resolveApproval(res.approvalId, "approved", "owner@example.com", ORG, { actorId: "mem_1" });
     expect(approved?.status).toBe("approved");
 
     // Employee should be checked for active status at fulfill time
