@@ -848,6 +848,11 @@ async function fulfillSnsPublish(
  * MIME + threadId. From must equal the authenticated mailbox. Unknown
  * outcomes are recorded and never retried. draft_only is still blocked by
  * recheckPolicyAtFulfill. Resend is not used. Logs never include bodies.
+ *
+ * M3/Mask: Auth link approvals (authActionLink: true) are NOT auto-fulfilled.
+ * The snapshot contains masked body ([REDACTED] in place of oobCode/apiKey),
+ * so auto-fulfill would send broken links. Auth link sends require re-invoke
+ * with approvalId, where the original body is validated via mailSendPin.
  */
 async function fulfillMailSend(
   approval: ApprovalRequest,
@@ -858,6 +863,36 @@ async function fulfillMailSend(
   if (existing?.error === POST_OUTCOME_UNKNOWN) return existing;
 
   const at = new Date().toISOString();
+
+  // M3/Mask: Auth link approvals cannot be auto-fulfilled because the snapshot
+  // body contains [REDACTED] in place of oobCode/apiKey (security requirement).
+  // The sender must re-invoke with approvalId to provide the original body.
+  const isAuthLinkApproval = approval.metadata?.authActionLink === true;
+  if (isAuthLinkApproval) {
+    const fulfillment: ApprovalFulfillment = {
+      ok: false,
+      error: "auth_link_rerun_required",
+      at,
+    };
+    await persistFulfillment(approval, fulfillment);
+    await appendAuditEvent({
+      orgId: approval.orgId,
+      employeeId: approval.employeeId,
+      credentialId: approval.credentialId,
+      action: "tool.invoke",
+      purpose: approval.purpose,
+      summary: "認証リンク送信は approvalId 付き再実行が必要（自動 fulfill は無効）",
+      metadata: {
+        approvalId: approval.id,
+        tool: snapshot.tool,
+        jobId: snapshot.jobId,
+        code: "auth_link_rerun_required",
+        reason: "snapshot_contains_redacted_secrets",
+        phase: "approval.fulfill",
+      },
+    }).catch(() => undefined);
+    return fulfillment;
+  }
   const args = snapshot.args;
 
   const to = (

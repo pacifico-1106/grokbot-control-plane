@@ -487,7 +487,9 @@ export async function resolveApprovalWithoutWorkflowDetailed(
   const revisionNote = opts.revisionNote?.trim() || null;
   if (status === "revision_requested" && !revisionNote) return { approval: null, reason: "resolve_failed" };
   // PR-D: only approvals are gated; reject / revise keep today's rules (nothing is applied).
-  const enforceAuthority = status === "approved" && isApproverAuthorityEnabled();
+  // M2: When AUTHORITY flag is ON, enforce for all tickets with requiredApproverKind.
+  // M2: Auth link approvals (requiredApproverKind set) ALWAYS enforce, even when flag is OFF.
+  const enforceAuthorityGlobal = status === "approved" && isApproverAuthorityEnabled();
   if (isDemoMode()) {
     const existing = await demoGetApproval(id);
     if (!existing || existing.orgId !== orgId) return { approval: null, reason: "resolve_failed" };
@@ -500,6 +502,9 @@ export async function resolveApprovalWithoutWorkflowDetailed(
         grokBotAgentId: opts.grokBotAgentId,
       });
     }
+    // M2: Enforce authority for tickets with requiredApproverKind even when global flag is OFF.
+    // This ensures auth link approvals always require owner/designated_admin.
+    const enforceAuthority = status === "approved" && (enforceAuthorityGlobal || Boolean(existing.requiredApproverKind));
     if (enforceAuthority && existing.requiredApproverKind) {
       const decision = await checkApproverAuthority({
         orgId,
@@ -536,10 +541,15 @@ export async function resolveApprovalWithoutWorkflowDetailed(
     });
   }
 
+  // M2: Enforce authority for tickets with requiredApproverKind even when global flag is OFF.
+  // This ensures auth link approvals always require owner/designated_admin.
+  const enforceAuthority = status === "approved" && (enforceAuthorityGlobal || Boolean(existing.requiredApproverKind));
+
   // Use the security definer RPC for atomic authorization check and update
   // This ensures admin-class tickets with enforcement ON have a verified resolver
   // PR-D: p_enforce_approver_authority is only sent when the flag is ON, so the
   // flag-OFF call is byte-for-byte today's 7-argument call.
+  // M2: Also send when existing.requiredApproverKind is set (auth link approvals).
   const { data: rpcResult, error: rpcError } = await admin.rpc("resolve_approval_w1_checked", {
     p_id: id,
     p_org: orgId,

@@ -171,9 +171,10 @@ describe("evaluateAuthActionLinkPolicy", () => {
     }
   });
 
-  test("allows when only aws_secret_key is suspected (auth link apiKey)", () => {
-    // aws_secret_key suspected should be ignored when auth links are present
-    // (the apiKey in auth links can trigger this pattern)
+  test("M1: blocks when aws_secret_key is suspected (not apiKey-matching)", () => {
+    // M1: aws_secret_key suspected should NO LONGER be unconditionally ignored.
+    // If the secret-detector reports it as suspected, it means it's NOT the
+    // auth link's apiKey (the detector already filters those). Block it.
     const result = evaluateAuthActionLinkPolicy(makeInput({
       secretDetection: {
         ok: true,
@@ -181,9 +182,9 @@ describe("evaluateAuthActionLinkPolicy", () => {
         suspected: [{ pattern: "aws_secret_key", fieldPath: "args.body", length: 40 }],
       },
     }));
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.action).toBe("needs_approval");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("other_secret_detected");
     }
   });
 
@@ -228,5 +229,67 @@ describe("buildAuthActionLinkArtifactLines", () => {
     expect(lines.some(l => l.includes("宛先:"))).toBe(true);
     expect(lines.some(l => l.includes("[masked]"))).toBe(true);
     expect(lines.join("\n")).not.toContain("AIza");
+  });
+});
+
+// ============================================================================
+// M1: aws_secret_key / api_key_inline suspected exact match only
+// ============================================================================
+describe("M1: aws_secret_key suspected は auth link の apiKey と完全一致したときだけ無視", () => {
+  // M1: The secret-detector already filters out aws_secret_key suspected that
+  // matches the auth link's apiKey value (see secret-detector.ts L510-528).
+  // Therefore, any aws_secret_key suspected that reaches the policy evaluation
+  // is a DIFFERENT key (not the apiKey from the auth link) and should be blocked.
+
+  test("blocks when any aws_secret_key suspected is present (not filtered by detector)", () => {
+    // If aws_secret_key suspected reaches policy evaluation, it means the
+    // secret-detector determined it does NOT match the auth link's apiKey.
+    // In this case, it should be blocked as other_secret_detected.
+    const result = evaluateAuthActionLinkPolicy(makeInput({
+      secretDetection: {
+        ok: true,
+        authActionLinks: [{ mode: "resetPassword", hasOobCode: true, hasApiKey: true }],
+        suspected: [
+          { pattern: "aws_secret_key", fieldPath: "args.body", length: 40 }
+        ],
+      },
+    }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("other_secret_detected");
+    }
+  });
+
+  test("blocks api_key_inline suspected (not filtered by detector)", () => {
+    // api_key_inline suspected outside of auth link should block
+    const result = evaluateAuthActionLinkPolicy(makeInput({
+      secretDetection: {
+        ok: true,
+        authActionLinks: [{ mode: "resetPassword", hasOobCode: true, hasApiKey: true }],
+        suspected: [
+          { pattern: "api_key_inline", fieldPath: "args.body", length: 50 }
+        ],
+      },
+    }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("other_secret_detected");
+    }
+  });
+
+  test("allows when no suspected secrets (detector filtered apiKey-matching ones)", () => {
+    // When secret-detector has already filtered out the apiKey-matching aws_secret_key,
+    // no suspected should remain, and the policy should allow.
+    const result = evaluateAuthActionLinkPolicy(makeInput({
+      secretDetection: {
+        ok: true,
+        authActionLinks: [{ mode: "resetPassword", hasOobCode: true, hasApiKey: true }],
+        // No suspected - detector already filtered the apiKey match
+      },
+    }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.action).toBe("needs_approval");
+    }
   });
 });

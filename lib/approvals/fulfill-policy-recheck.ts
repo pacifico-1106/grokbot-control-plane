@@ -22,6 +22,8 @@ export const FULFILL_POLICY_BLOCK_CODES = [
   "fulfill_blocked_mail_policy",
   "fulfill_blocked_employee_unavailable",
   "fulfill_blocked_conversation_org_mismatch",
+  // M3: auth-link policy re-check at fulfill
+  "fulfill_blocked_auth_link_policy",
 ] as const;
 export type FulfillPolicyBlockCode = (typeof FULFILL_POLICY_BLOCK_CODES)[number];
 
@@ -87,6 +89,30 @@ export async function recheckPolicyAtFulfill(
       employeeId,
       body: { args: snapshot.args, conversation: snapshot.conversation },
     });
+
+    // M3: Re-check auth-link policy at fulfill time.
+    // Auth link approvals (metadata.authActionLink: true) require:
+    // - Internal single recipient (audience must still be "internal")
+    // - No CC/BCC (already checked at submission, stored in snapshot)
+    // - External is prohibited
+    // The snapshot's to/cc/bcc don't change, but the audience determination
+    // can change if the internal audience rule changes after approval.
+    const isAuthLinkApproval = approval.metadata?.authActionLink === true;
+    if (isAuthLinkApproval && decision.audience !== "internal") {
+      return {
+        ok: false,
+        code: "fulfill_blocked_auth_link_policy",
+        reason: "auth_link_external_recipient",
+        messageJa:
+          "承認後に宛先の判定が変わり、認証リンクの宛先が社外と判定されたため停止しました（送信していません）。社内宛ての認証リンクのみ送信できます。",
+        detail: {
+          to,
+          audience: decision.audience,
+          auditLabels: decision.auditLabels,
+        },
+      };
+    }
+
     if (decision.rejected || decision.demotedToDraft) {
       return {
         ok: false,

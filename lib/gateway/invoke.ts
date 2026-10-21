@@ -619,26 +619,24 @@ async function createNeedsApprovalResponse(opts: {
     pollPath = created.approval.pollPath;
     demoStore = created.demoStore ?? null;
   } catch (e) {
-    // Still return needs_approval so Bot stops; ticket create failure is surfaced.
+    // L: Return failure when createApproval fails, not needs_approval
     const errMsg = e instanceof Error ? e.message : "approval_create_failed";
     return jsonResult(
       {
         ok: false,
-        code: "needs_approval",
-        error: "needs_approval",
-        message: opts.message,
-        needs_approval: true,
-        approvalCreateError: errMsg,
+        code: "approval_create_failed",
+        error: errMsg,
+        message: `承認チケットの作成に失敗しました: ${errMsg}`,
+        needs_approval: false,
         employeeId: opts.employeeId,
         tool: opts.tool,
         purpose: opts.purpose,
         jobId: opts.jobId,
         summary,
         title,
-        pollHint: "continue_polling",
         ...opts.extra,
       },
-      opts.httpStatus ?? 402
+      500
     );
   }
 
@@ -2625,8 +2623,9 @@ async function runGatewayInvokeInner(
               ...(secretDetection.ok && secretDetection.suspected?.length
                 ? { suspected: secretDetection.suspected }
                 : {}),
-              // M2: Self-approval prevention - set requesterMemberId to employeeId
-              requesterMemberId: employeeId,
+              // M2: Do NOT set requesterMemberId to employeeId (AI employee).
+              // The requesterMemberId should only be set to a human member ID.
+              // Auth link approvals require owner/designated_admin via requiredApproverKind.
             },
           });
 
@@ -2677,23 +2676,21 @@ async function runGatewayInvokeInner(
             402
           );
         } catch (e) {
+          // L: Return failure when createApproval fails, not needs_approval
           const errMsg = e instanceof Error ? e.message : "approval_create_failed";
           return jsonResult(
             {
               ok: false,
-              code: "needs_approval",
-              error: "needs_approval",
-              authActionLinkReason: "auth_action_link_internal",
-              message: authLinkSummary,
-              needs_approval: true,
-              approvalCreateError: errMsg,
+              code: "approval_create_failed",
+              error: errMsg,
+              message: `承認チケットの作成に失敗しました: ${errMsg}`,
+              needs_approval: false,
               employeeId,
               tool,
               purpose,
               jobId,
-              pollHint: "continue_polling",
             },
-            402
+            500
           );
         }
       }

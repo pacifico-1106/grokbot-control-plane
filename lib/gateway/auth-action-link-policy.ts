@@ -82,16 +82,14 @@ export function evaluateAuthActionLinkPolicy(
     return allow("no_auth_links");
   }
 
-  // Check for OTHER secrets (not from the auth link's apiKey).
-  // The aws_secret_key pattern can match the apiKey parameter (40 chars alphanumeric),
-  // so we ignore aws_secret_key suspected when auth links are present.
+  // M1: Check for ANY suspected secrets. The secret-detector already filters out
+  // aws_secret_key matches that correspond to the auth link's apiKey value
+  // (see secret-detector.ts L510-528). Any aws_secret_key that reaches here
+  // is a DIFFERENT key, not the apiKey from the auth link, and must be blocked.
+  // api_key_inline is also blocked if it reaches here (detector filters those
+  // inside auth link URLs; see secret-detector.ts L551-567).
   if (input.secretDetection.ok && input.secretDetection.suspected && input.secretDetection.suspected.length > 0) {
-    const otherSecrets = input.secretDetection.suspected.filter(
-      (s) => s.pattern !== "aws_secret_key"
-    );
-    if (otherSecrets.length > 0) {
-      return blocked("other_secret_detected");
-    }
+    return blocked("other_secret_detected");
   }
 
   if (input.isChannelPost) {
