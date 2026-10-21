@@ -27,6 +27,7 @@ import { getEffectiveIngressHandoffPolicy } from "@/lib/data/ingress-handoff";
 import { getOrgChannel } from "@/lib/data/directory";
 import { isChannelClassifyProposalsEnabled } from "@/lib/channel-classify/flags";
 import { storeWakeParent } from "@/lib/data/wake-parent-stash";
+import { pinAuthenticatedSlackSpeaker } from "@/lib/slack/authenticated-speaker";
 import { resolveIngressHandoffSync } from "@/lib/ingress-handoff/resolve";
 import { applyBodyMode } from "@/lib/ingress-handoff/apply";
 import type { ChannelClassification, SealithHandoff } from "@/lib/types";
@@ -621,6 +622,16 @@ async function postWake(
         channelId: payload.channel,
         parentTs: payload.ts,
         eventId: payload.eventId,
+      });
+    }
+
+    // Signing-secret-verified speaker — gateway auth-link must not trust body speakerId.
+    if (payload.speakerId) {
+      pinAuthenticatedSlackSpeaker({
+        orgId: target.orgId,
+        employeeId: target.employeeId,
+        speakerId: payload.speakerId,
+        channelId: payload.channel,
       });
     }
 

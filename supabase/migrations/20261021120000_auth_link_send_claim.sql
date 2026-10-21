@@ -7,7 +7,9 @@
 -- only while the ticket is this org's, approved, authActionLink, and
 -- not already sending / consumed / uncertain. Concurrent callers
 -- serialize on the row; READ COMMITTED re-checks WHERE → exactly one
--- 'claimed'.
+-- 'claimed'. Claim stores sentAt + ttlSeconds (10 minutes).
+-- Stale sending (sentAt older than TTL) is marked uncertain and
+-- returned as 'uncertain' — never reclaimed, never resent.
 -- release_auth_link_send: clears sending only when this job holds it
 -- (retryable provider failure).
 -- consume_auth_link_send: marks consumed only when this job holds sending
@@ -24,6 +26,9 @@ declare
   n integer;
   cur text;
   consumed text;
+  sent_at_text text;
+  ttl_secs integer;
+  stale boolean := false;
 begin
   if p_job_id is null or length(p_job_id) < 1 then
     raise exception 'invalid_job_id';
@@ -34,6 +39,8 @@ begin
            jsonb_build_object(
              'status', 'sending',
              'sendingAt', p_at,
+             'sentAt', p_at,
+             'ttlSeconds', 600,
              'sendingByJobId', p_job_id,
              'consumed', false
            ))
@@ -49,8 +56,13 @@ begin
   end if;
   select
     metadata->'authLinkFulfillment'->>'status',
-    metadata->'authLinkFulfillment'->>'consumed'
-    into cur, consumed
+    metadata->'authLinkFulfillment'->>'consumed',
+    coalesce(
+      metadata->'authLinkFulfillment'->>'sentAt',
+      metadata->'authLinkFulfillment'->>'sendingAt'
+    ),
+    coalesce((metadata->'authLinkFulfillment'->>'ttlSeconds')::int, 600)
+    into cur, consumed, sent_at_text, ttl_secs
     from public.approval_requests
    where id = p_id and org_id = p_org;
   if not found then
@@ -63,6 +75,26 @@ begin
     return 'uncertain';
   end if;
   if cur = 'sending' then
+    if sent_at_text is null or sent_at_text = '' then
+      stale := true;
+    else
+      stale := (sent_at_text::timestamptz + make_interval(secs => ttl_secs)) < p_at;
+    end if;
+    if stale then
+      update public.approval_requests
+         set metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
+               'authLinkFulfillment',
+               jsonb_build_object(
+                 'status', 'uncertain',
+                 'consumed', false,
+                 'uncertainAt', p_at,
+                 'uncertainByJobId', p_job_id
+               ))
+       where id = p_id
+         and org_id = p_org
+         and metadata->'authLinkFulfillment'->>'status' = 'sending';
+      return 'uncertain';
+    end if;
     return 'sending';
   end if;
   return 'not_found';

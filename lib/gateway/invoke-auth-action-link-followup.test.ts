@@ -66,6 +66,8 @@ afterEach(async () => {
   );
   setAuthLinkAfterProviderSendForTests(null);
   setAuthLinkConsumeResultForTests(null);
+  const { clearAuthenticatedSlackSpeakers } = await import("@/lib/slack/authenticated-speaker");
+  clearAuthenticatedSlackSpeakers();
 });
 
 async function withNeedsApprovalMailPolicy<T>(fn: () => Promise<T>): Promise<T> {
@@ -105,6 +107,16 @@ function mailArgs(overrides: Record<string, unknown> = {}) {
     body: makeAuthLinkBody(),
     ...overrides,
   };
+}
+
+async function pinSpeaker(speakerId = SPEAKER, employeeId = EMP) {
+  const { pinAuthenticatedSlackSpeaker } = await import("@/lib/slack/authenticated-speaker");
+  pinAuthenticatedSlackSpeaker({
+    orgId: DEMO_ORG.id,
+    employeeId,
+    speakerId,
+    channelId: "C_AUTH_FLW",
+  });
 }
 
 async function bindSpeaker(memberId = "mem_1") {
@@ -150,6 +162,7 @@ function invokeMail(opts: {
 
 async function createApprovedAuthLink(jobSuffix: string) {
   await bindSpeaker();
+  await pinSpeaker();
   const originalBody = makeAuthLinkBody();
   const args = mailArgs({ body: originalBody });
   const jobId = `job_auth_flw_${jobSuffix}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -249,7 +262,7 @@ describe("M2: speakerId unresolved → fail-closed, no ticket", () => {
     expect(result.httpStatus).toBe(400);
     expect(result.body.ok).toBe(false);
     expect(result.body.code).toBe("auth_link_requester_unresolved");
-    expect(result.body.reason).toBe("not_declared");
+    expect(result.body.reason).toBe("speaker_context_missing");
     expect(result.body.needs_approval).not.toBe(true);
     expect(result.body.approvalId).toBeFalsy();
     const after = (await listApprovals(DEMO_ORG.id)).filter((a) => a.status === "pending").length;
@@ -260,6 +273,7 @@ describe("M2: speakerId unresolved → fail-closed, no ticket", () => {
   test("speakerId with no voter binding rejects without creating an approval", async () => {
     const { resetDemoVoterBindings } = await import("@/lib/approval-workflow/voter-binding");
     resetDemoVoterBindings();
+    await pinSpeaker("U0AUTHUNKNWN");
     const before = (await listApprovals(DEMO_ORG.id)).filter((a) => a.status === "pending").length;
     const result = await withNeedsApprovalMailPolicy(() =>
       invokeMail({ jobSuffix: "m2_unbound", speakerId: "U0AUTHUNKNWN" })

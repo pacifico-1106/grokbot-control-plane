@@ -17,6 +17,10 @@ import { normalizeMailPolicy } from "@/lib/mail-policy/validate";
 import { getApprovalById, listApprovals, resolveApproval } from "@/lib/data";
 import { setOrgInternalAudienceRule, clearDemoRule } from "@/lib/data/internal-audience-rule";
 import type { Employee } from "@/lib/types";
+import {
+  clearAuthenticatedSlackSpeakers,
+  pinAuthenticatedSlackSpeaker,
+} from "@/lib/slack/authenticated-speaker";
 
 // Internal domain for test
 const INTERNAL_DOMAIN = "tokyo307inc.com";
@@ -24,6 +28,15 @@ const INTERNAL_DOMAIN = "tokyo307inc.com";
 // google_api_key pattern requires 39+ chars (AIza + 35)
 const DUMMY_API_KEY = "AIzaSyDummyKeyForTestingPurposesABC12345";
 const AUTH_LINK_SPEAKER = "U0AUTHTEST01";
+
+function pinAuthLinkSpeaker(speakerId = AUTH_LINK_SPEAKER, employeeId = "emp_sales") {
+  pinAuthenticatedSlackSpeaker({
+    orgId: DEMO_ORG.id,
+    employeeId,
+    speakerId,
+    channelId: "C_AUTH_LINK",
+  });
+}
 
 async function bindAuthLinkSpeaker(memberId = "mem_1", opts?: { reset?: boolean }) {
   const { createPendingVoterBinding, verifyVoterBinding, resetDemoVoterBindings } = await import(
@@ -50,6 +63,7 @@ beforeEach(async () => {
   savedFlag = process.env.SECRET_AUTH_ACTION_LINK_ENABLED;
   savedOrgIds = process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
   await bindAuthLinkSpeaker();
+  pinAuthLinkSpeaker();
 });
 
 afterEach(async () => {
@@ -59,6 +73,7 @@ afterEach(async () => {
   else process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS = savedOrgIds;
   resetDemoMailPolicy();
   clearDemoRule();
+  clearAuthenticatedSlackSpeakers();
 });
 
 async function withNeedsApprovalMailPolicy<T>(fn: () => Promise<T>): Promise<T> {
@@ -98,6 +113,7 @@ function sendMailWithAuthLink(opts: {
   jobSuffix: string;
 }) {
   const toArray = Array.isArray(opts.to) ? opts.to : [opts.to];
+  pinAuthLinkSpeaker();
   return runGatewayInvoke({
     employeeId: "emp_sales",
     credentialId: "cred_sales",
@@ -698,6 +714,7 @@ describe("M2a: 人間依頼者の自己承認防止 (speakerId → requesterMemb
     // Set up: Create and verify voter binding for the speaker Slack user ID
     // Use valid Slack user ID format: /^[UW][A-Z0-9]{2,30}$/
     await bindSlackVoter("U0M2ASPKR01", "mem_1"); // mem_1 is an owner in demo data
+    pinAuthLinkSpeaker("U0M2ASPKR01");
 
     // Send mail with auth link AND speakerId at top-level of body
     // For mail.send, speakerId identifies the human requester without affecting egress
@@ -731,6 +748,7 @@ describe("M2a: 人間依頼者の自己承認防止 (speakerId → requesterMemb
     // Set up: Create and verify voter binding for the owner
     // Use valid Slack user ID format
     await bindSlackVoter("U0M2AOWNR01", "mem_1"); // mem_1 is an owner in demo data
+    pinAuthLinkSpeaker("U0M2AOWNR01");
     
     // Add a second owner to trigger self-approval denial
     // (With only 1 owner, self-approval is allowed by design)
@@ -803,8 +821,9 @@ describe("M2a: 人間依頼者の自己承認防止 (speakerId → requesterMemb
   });
 
   test("M2a: without speakerId, no requesterMemberId is set (AI employee request)", async () => {
-    // Follow-up M2: missing speakerId is fail-closed — no ticket.
-    const result = await withNeedsApprovalMailPolicy(() =>
+    // Follow-up M4: no authenticated speaker pin → fail-closed.
+    clearAuthenticatedSlackSpeakers();
+    const result = await withNeedsApprovalMailPolicy(() => {
       runGatewayInvoke({
         employeeId: "emp_sales",
         credentialId: "cred_sales",
@@ -823,7 +842,7 @@ describe("M2a: 人間依頼者の自己承認防止 (speakerId → requesterMemb
     );
     expect(result.httpStatus).toBe(400);
     expect(result.body.code).toBe("auth_link_requester_unresolved");
-    expect(result.body.reason).toBe("not_declared");
+    expect(result.body.reason).toBe("speaker_context_missing");
     expect(result.body.approvalId).toBeFalsy();
   });
 
@@ -831,6 +850,7 @@ describe("M2a: 人間依頼者の自己承認防止 (speakerId → requesterMemb
     const { resetDemoVoterBindings } = await import("@/lib/approval-workflow/voter-binding");
     resetDemoVoterBindings();
     // No voter binding created for U0M2AUNKNWN (valid Slack format but no binding)
+    pinAuthLinkSpeaker("U0M2AUNKNWN");
 
     const result = await withNeedsApprovalMailPolicy(async () => {
       return runGatewayInvoke({
