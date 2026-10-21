@@ -64,6 +64,7 @@
 | 文書 | 相対 |
 |------|------|
 | **リモート MCP（Grok Bot / Cursor / Claude）** | [mcp.md](./mcp.md) |
+| `/app/audit` 可読性（提案・未実装） | [design/audit-log-readability-20261016.md](./design/audit-log-readability-20261016.md) |
 | アーキテクチャ概要 | [architecture.md](./architecture.md) |
 | 強制（Auto vs Manual） | [enforcement-auto-vs-manual.md](./enforcement-auto-vs-manual.md) |
 | Gateway vs Auto-review | [gateway-vs-auto-review.md](./gateway-vs-auto-review.md) |
