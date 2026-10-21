@@ -172,11 +172,29 @@ export async function handleLineAccountWebhook(
   }
   const events = Array.isArray(parsed.events) ? (parsed.events as LineEvent[]).slice(0, LINE_MAX_EVENTS_PER_BODY) : [];
   let retry = false;
+  let fail = false;
   for (const ev of events) {
     const r = await processEvent(account, ev, d);
     if (r === "retry") retry = true;
+    if (r === "fail") fail = true;
   }
+  if (fail) return { status: 500, body: { ok: false, error: "retry" } };
   return retry ? { status: 503, body: { ok: false, error: "retry" } } : { status: 200, body: { ok: true } };
+}
+
+export function selectSameOaLineApprovalChannel<T extends { id: string; provider?: string; enabled?: boolean; config?: Record<string, unknown> }>(
+  account: CommAccount,
+  channels: T[]
+): T | null {
+  const dest = account.externalAccountId;
+  return (
+    channels.find((c) => {
+      if (c.provider !== "line" || c.enabled === false) return false;
+      const cfg = c.config || {};
+      const destinationId = String(cfg.destinationId || cfg.destination || "").trim();
+      return destinationId === dest;
+    }) ?? null
+  );
 }
 
 async function defaultDispatchApproval(
@@ -192,7 +210,7 @@ async function defaultDispatchApproval(
       tryHandleLineRevisionText,
     } = await import("@/lib/line/approval-events");
     const channels = await getEnabledNotificationChannels(account.orgId);
-    const channel = channels.find((c) => c.provider === "line");
+    const channel = selectSameOaLineApprovalChannel(account, channels);
     if (!channel) return false;
     if (kind === "postback") {
       await handleLineApprovalEvents(channel, [ev]);
@@ -211,7 +229,7 @@ async function defaultDispatchApproval(
   }
 }
 
-async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressDeps): Promise<"done" | "retry"> {
+async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressDeps): Promise<"done" | "retry" | "fail"> {
   if (!ev || typeof ev !== "object") return "done";
   const key = typeof ev.webhookEventId === "string" ? ev.webhookEventId : "";
   if (!key) return "done";
@@ -219,24 +237,40 @@ async function processEvent(account: CommAccount, ev: LineEvent, d: LineIngressD
   const ts = typeof ev.timestamp === "number" ? ev.timestamp : NaN;
   const redelivery = ev.deliveryContext?.isRedelivery === true;
   if (!Number.isFinite(ts) || ts > now + LINE_FUTURE_SKEW_MS || (!redelivery && ts < now - LINE_STALE_MS)) return "done";
+  const src = ev.source || {};
+  const sender = String(src.userId || "");
+  const channelKey = `comm_account:${account.id}`;
+  const isUnfollow = ev.type === "unfollow" && LINE_USER_RE.test(sender);
+
+  if (isUnfollow) {
+    // M2: revoke first. If it fails, do not consume the event — LINE 5xx retries.
+    try {
+      const revoked = await (d.revokeLink ?? defaultDeps.revokeLink)?.(account.orgId, channelKey, sender);
+      if (
+        revoked &&
+        typeof revoked === "object" &&
+        "ok" in revoked &&
+        (revoked as { ok?: boolean }).ok === false &&
+        (revoked as { reason?: string }).reason !== "binding_not_found"
+      ) {
+        return "fail";
+      }
+    } catch {
+      return "fail";
+    }
+    const recordedUnfollow = await recordInboundEvent(account, key);
+    if (recordedUnfollow === "error") return "retry";
+    return "done";
+  }
+
   const recorded = await recordInboundEvent(account, key);
   if (recorded === "duplicate" || recorded === "invalid") return "done";
   if (recorded === "error") return "retry";
-
-  const src = ev.source || {};
-  const sender = String(src.userId || "");
 
   // U-06 / U-19: approval postbacks stay live on the same OA even while the
   // employee is held. Wake / conversation send stay gated below.
   if (ev.type === "postback") {
     await (d.dispatchApproval ?? defaultDispatchApproval)(account, ev, "postback");
-    return "done";
-  }
-
-  const channelKey = `comm_account:${account.id}`;
-  if (ev.type === "unfollow" && LINE_USER_RE.test(sender)) {
-    // U-02: unlink this LINE user only. Account stays ACTIVE. No wake.
-    await (d.revokeLink ?? defaultDeps.revokeLink)?.(account.orgId, channelKey, sender).catch(() => undefined);
     return "done";
   }
   if (ev.type === "follow" && LINE_USER_RE.test(sender)) {

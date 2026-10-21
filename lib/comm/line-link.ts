@@ -6,7 +6,7 @@
  * The plaintext code is never stored or logged.
  */
 import { upsertProofVerifiedVoterBinding } from "@/lib/approval-workflow/voter-binding";
-import { redeemLineLinkCode } from "@/lib/line/link-code-limits";
+import { redeemConversationLinkCodeGuarded } from "@/lib/line/link-code-limits";
 import { parseLineLinkCodeText } from "@/lib/line/link-code";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { readCommAccountSecretsForServer } from "@/lib/comm/accounts";
@@ -77,9 +77,9 @@ export async function redeemConversationLinkCode(
 ): Promise<{ handled: false } | { handled: true; bound: boolean; reason?: string }> {
   const code = parseLineLinkCodeText(input.text);
   if (!code) return { handled: false };
-  const consumed = await redeemLineLinkCode({
+  const consumed = await redeemConversationLinkCodeGuarded({
     orgId: input.orgId,
-    channelId: input.accountId,
+    accountId: input.accountId,
     code,
     lineUserId: input.lineUserId,
   });

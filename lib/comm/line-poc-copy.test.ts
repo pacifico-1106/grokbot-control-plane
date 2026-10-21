@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import {
   LINE_COMM_ACCOUNT_CONNECT_BUTTON_JA,
   LINE_COMM_ACCOUNT_FAIL_FALLBACK_JA,
+  LINE_COMM_ACCOUNT_HELP_JA,
   LINE_COMM_ACCOUNT_PAGE_PATH,
   LINE_COMM_ACCOUNT_SECTION_TITLE_JA,
   LINE_COMM_ACCOUNT_SUCCESS_JA,
@@ -46,6 +47,9 @@ describe("LP-UI-01 constants are the screen source", () => {
     expect(src("components/employees/EmployeeLineCommAccountForm.tsx")).toContain("LINE_COMM_ACCOUNT_FAIL_FALLBACK_JA");
     expect(src("components/employees/EmployeeLineLinkCodeForm.tsx")).toContain("LINE_COMM_LINK_ISSUE_BUTTON_JA");
     expect(src("components/employees/EmployeeLineLinkCodeForm.tsx")).toContain("LINE_COMM_LINK_ISSUE_FAIL_JA");
+    expect(LINE_COMM_ACCOUNT_HELP_JA).toBe(
+      "この社員専用の LINE 公式アカウントを接続します。チャネルアクセストークンはサーバーだけが復号し、ログには残りません。この設定は AI 社員からは変更できません。"
+    );
     expect(LINE_COMM_ACCOUNT_SECTION_TITLE_JA).toBe("LINE 公式アカウント（会話）");
     expect(LINE_COMM_LINK_SECTION_TITLE_JA).toBe("LINE 会話の連携コード");
     expect(LINE_COMM_ACCOUNT_CONNECT_BUTTON_JA).toBe("接続して Webhook を登録");
@@ -67,10 +71,41 @@ describe("LP-LNK-01 conversation link copy", () => {
 });
 
 describe("LP-QTA-04 80% notice copy (U-21, L0 records only)", () => {
-  test("tenant-admin mail + ops notice strings exist", () => {
-    expect(LINE_QUOTA_80_NOTICE_TENANT_ADMIN_SUBJECT_JA).toContain("8 割");
-    expect(LINE_QUOTA_80_NOTICE_TENANT_ADMIN_BODY_JA).toContain("テナント");
-    expect(LINE_QUOTA_80_NOTICE_OPS_JA).toContain("運営");
+  test("tenant-admin mail interpolates employee / usage and omits 本文や秘密", async () => {
+    const { LINE_QUOTA_80_NOTICE_TENANT_ADMIN_BODY_OF } = await import("@/lib/comm/line-poc-copy");
+    const body = LINE_QUOTA_80_NOTICE_TENANT_ADMIN_BODY_OF({
+      employeeDisplayName: "安藤OA",
+      used: 1600,
+      limit: 2000,
+    });
+    expect(body).toContain("安藤OA");
+    expect(body).toContain("1600");
+    expect(body).toContain("2000");
+    expect(body).toContain("プラン");
+    expect(body).not.toContain("本文や秘密は記録していません");
+    expect(LINE_QUOTA_80_NOTICE_TENANT_ADMIN_BODY_JA).not.toContain("本文や秘密は記録していません");
+  });
+
+  test("ops notice interpolates org / employee / usage", async () => {
+    const { LINE_QUOTA_80_NOTICE_OPS_OF } = await import("@/lib/comm/line-poc-copy");
+    const ops = LINE_QUOTA_80_NOTICE_OPS_OF({
+      orgName: "TOKYO307",
+      orgId: "92f3617c-33fc-4dac-b9b4-d4f42e8522ac",
+      employeeDisplayName: "安藤OA",
+      used: 1600,
+      limit: 2000,
+    });
+    expect(ops).toContain("TOKYO307");
+    expect(ops).toContain("92f3617c-33fc-4dac-b9b4-d4f42e8522ac");
+    expect(ops).toContain("安藤OA");
+    expect(ops).toContain("1600");
+    expect(ops).toContain("2000");
+  });
+
+  test("quota-exceeded body drops 他テナント and says until reset or plan change", async () => {
+    const { LINE_QUOTA_EXCEEDED_APPROVER_BODY_JA } = await import("@/lib/comm/line-poc-copy");
+    expect(LINE_QUOTA_EXCEEDED_APPROVER_BODY_JA).not.toContain("他テナントの承認者には届きません");
+    expect(LINE_QUOTA_EXCEEDED_APPROVER_BODY_JA).toMatch(/来月|リセット|プラン/);
   });
 });
 
@@ -83,8 +118,8 @@ describe("LP-QTA-01/06 official 429 messages", () => {
 });
 
 describe("LP-HRK-01 extracted Web-only list", () => {
-  test("only hold.release is LINE-blocked in current code", () => {
-    expect(LINE_WEB_ONLY_HIGH_RISK.map((x) => x.tool)).toEqual(["employee.hold.release"]);
+  test("hold.release remains LINE-blocked", () => {
+    expect(LINE_WEB_ONLY_HIGH_RISK.some((x) => x.tool === "employee.hold.release")).toBe(true);
     expect(LINE_WEB_ONLY_HIGH_RISK[0]?.reason).toBe("hold_release_web_only");
     const holdConfig = src("lib/safety/hold-config.ts");
     expect(holdConfig).toContain('HOLD_RELEASE_SURFACES: readonly HoldStopSurface[] = ["web"]');

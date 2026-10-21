@@ -8,10 +8,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createCommAccount, resetDemoCommAccounts, setCommAccountSecrets, type CommAccount } from "@/lib/comm/accounts";
+import { issueConversationLinkCode, resetDemoConversationLinkCodes } from "@/lib/comm/conversation-link-code";
 import { redeemConversationLinkCode, sendConversationLinkReply } from "@/lib/comm/line-link";
 import { getVoterBinding, resetDemoVoterBindings } from "@/lib/approval-workflow/voter-binding";
 import { DEMO_MEMBERS, DEMO_ORG } from "@/lib/demo-data";
-import { issueLineLinkCode, resetDemoLineLinkCodes } from "@/lib/line/link-code";
+import { resetDemoLineLinkCodes } from "@/lib/line/link-code";
 import { __setLineLinkCodeGuardBackendForTests } from "@/lib/line/link-code-limits";
 
 const ENV = ["COMM_ACCOUNTS_ENABLED", "LINE_CONVERSATION_ENABLED", "NOTIFICATION_CONFIG_ENCRYPTION_KEY", "NEXT_PUBLIC_SUPABASE_URL", "VOTER_BINDING_SECRET", "LINE_LINK_CODE_LIMITS_ENABLED"] as const;
@@ -37,6 +38,7 @@ beforeEach(async () => {
   delete process.env.LINE_LINK_CODE_LIMITS_ENABLED; // conversation flag forces limits ON
   resetDemoCommAccounts();
   resetDemoLineLinkCodes();
+  resetDemoConversationLinkCodes();
   resetDemoVoterBindings();
   const r = await createCommAccount({ orgId: ORG, employeeId: EMP, surface: "line", externalAccountId: BOT, createdByMemberId: "m1" });
   if (!r.ok) throw new Error(r.reason);
@@ -52,6 +54,7 @@ afterEach(() => {
   console.log = origLog;
   __setLineLinkCodeGuardBackendForTests(null);
   resetDemoLineLinkCodes();
+  resetDemoConversationLinkCodes();
   resetDemoVoterBindings();
   for (const k of ENV) {
     if (saved[k] === undefined) delete process.env[k];
@@ -59,8 +62,8 @@ afterEach(() => {
   }
 });
 
-async function issueFor(channelId: string) {
-  const issued = await issueLineLinkCode({ orgId: ORG, channelId, memberId: MEMBER, issuedByUserId: "user-1" });
+async function issueFor(accountId: string) {
+  const issued = await issueConversationLinkCode({ orgId: ORG, accountId, memberId: MEMBER, issuedByUserId: "user-1" });
   if (!issued.ok) throw new Error(issued.reason);
   return issued;
 }

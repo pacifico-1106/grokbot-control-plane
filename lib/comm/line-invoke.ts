@@ -5,7 +5,7 @@
  */
 import { createHash } from "node:crypto";
 import { conversationTokenFromRequest } from "@/lib/comm/conversation-token";
-import { isLineConversationEnabled } from "@/lib/comm/flags";
+import { isLineConversationEnabled, parseOrgAllowlist } from "@/lib/comm/flags";
 import { recordLineReplyUnknown, wasLineReplyUnknown } from "@/lib/comm/reply-token-ledger";
 import { sendLineConversationMessage, type LineSendResult } from "@/lib/comm/line-send";
 import type { ConversationContext } from "@/lib/types";
@@ -54,6 +54,18 @@ export function lineExternalSendAllowed(input: {
   return input.informationClass === "public" && (input.egressDecision === "allow" || input.egressDecision === "summarize");
 }
 
+/**
+ * L2: when an org allowlist is set, a missing orgId must not enable LINE
+ * rewrite (orgScopedOn itself stays permissive so `/c/<ref>` can look up the
+ * account before applying the list).
+ */
+function lineRewriteEnabled(orgId?: string | null): boolean {
+  const conversation = parseOrgAllowlist(process.env.LINE_CONVERSATION_ORG_IDS);
+  const accounts = parseOrgAllowlist(process.env.COMM_ACCOUNTS_ORG_IDS);
+  if ((conversation !== null || accounts !== null) && !(orgId || "").trim()) return false;
+  return isLineConversationEnabled(orgId);
+}
+
 /** Unclassified external LINE: default confidential-deny becomes needs_approval. */
 export function lineForceExternalApproval(input: {
   surface?: string | null;
@@ -63,8 +75,9 @@ export function lineForceExternalApproval(input: {
   explicitClass?: string | null;
   unclassified?: boolean;
   employeeNoApproval?: boolean;
+  orgId?: string | null;
 }): boolean {
-  if (!isLineConversationEnabled()) return false;
+  if (!lineRewriteEnabled(input.orgId)) return false;
   if ((input.surface || "").toLowerCase() !== "line") return false;
   if (input.audience !== "external" && input.audience !== "unknown") return false;
   if (input.employeeNoApproval) return false;
@@ -81,8 +94,9 @@ export function lineWaiveExternalDeny(input: {
   explicitClass?: string | null;
   unclassified?: boolean;
   employeeNoApproval?: boolean;
+  orgId?: string | null;
 }): boolean {
-  if (!isLineConversationEnabled()) return false;
+  if (!lineRewriteEnabled(input.orgId)) return false;
   if ((input.surface || "").toLowerCase() !== "line") return false;
   if (!input.employeeNoApproval) return false;
   if (input.audience !== "external" && input.audience !== "unknown") return false;

@@ -12,7 +12,7 @@ export const LINE_COMM_ACCOUNT_PAGE_PATH_OF = (employeeId: string) =>
 
 export const LINE_COMM_ACCOUNT_SECTION_TITLE_JA = "LINE 公式アカウント（会話）";
 export const LINE_COMM_ACCOUNT_HELP_JA =
-  "この社員専用の LINE 公式アカウントを接続します。チャネルアクセストークンはサーバーだけが復号し、ログには残りません。AI は実行できません。";
+  "この社員専用の LINE 公式アカウントを接続します。チャネルアクセストークンはサーバーだけが復号し、ログには残りません。この設定は AI 社員からは変更できません。";
 export const LINE_COMM_ACCOUNT_BOT_USER_LABEL_JA = "ボット userId";
 export const LINE_COMM_ACCOUNT_WEBHOOK_LABEL_JA = "会話 Webhook URL";
 export const LINE_COMM_ACCOUNT_TOKEN_LABEL_JA = "チャネルアクセストークン";
@@ -46,10 +46,21 @@ export const LINE_CONVERSATION_LINK_GROUP_JA =
 /** Approver-link replies (same OA, U-06). Kept here so Kimura can review both. */
 export const LINE_APPROVER_LINK_OK_JA =
   "✅ この LINE アカウントを Staffpass の承認者として確認しました。Staffpass の設定画面に LINE ユーザー ID が表示されます。";
-export const LINE_APPROVER_LINK_INVALID_JA =
+export const LINE_APPROVER_LINK_INVALID_LEGACY_JA =
   "連携コードが無効か、有効期限（15分）が切れています。Staffpass の設定画面で新しいコードを発行してください。";
+export const LINE_APPROVER_LINK_ERROR_LEGACY_JA =
+  "連携コードを確認できませんでした。時間をおいて、もう一度お試しください。";
+/** Unified fail copy (same as conversation). Used when LINE_LINK_CODE_LIMITS_ENABLED is ON. */
+export const LINE_APPROVER_LINK_FAIL_JA = LINE_CONVERSATION_LINK_FAIL_JA;
+export const LINE_APPROVER_LINK_INVALID_JA = LINE_APPROVER_LINK_INVALID_LEGACY_JA;
 export const LINE_APPROVER_LINK_GROUP_JA = LINE_CONVERSATION_LINK_GROUP_JA;
-export const LINE_APPROVER_LINK_ERROR_JA = "連携コードを確認できませんでした。時間をおいて、もう一度お試しください。";
+export const LINE_APPROVER_LINK_ERROR_JA = LINE_APPROVER_LINK_ERROR_LEGACY_JA;
+
+export const LINE_WEB_ONLY_APPROVE_PATH = "/app/approvals";
+export function LINE_WEB_ONLY_APPROVE_JA_OF(approvalsUrl: string): string {
+  return `高リスクの操作は、パスキーが入るまで LINE では承認できません。Web で承認してください。${approvalsUrl}`;
+}
+export const LINE_WEB_ONLY_APPROVE_JA = LINE_WEB_ONLY_APPROVE_JA_OF(LINE_WEB_ONLY_APPROVE_PATH);
 
 /**
  * QTA-04 / U-21: 80% monthly-quota notice. L0 records the copy only;
@@ -57,13 +68,37 @@ export const LINE_APPROVER_LINK_ERROR_JA = "連携コードを確認できませ
  */
 export const LINE_QUOTA_80_NOTICE_TENANT_ADMIN_SUBJECT_JA =
   "【Staffpass】LINE 送信通数が月間上限の 8 割に達しました";
-export const LINE_QUOTA_80_NOTICE_TENANT_ADMIN_BODY_JA =
-  "このテナントの LINE 公式アカウントの送信通数が、今月の上限の 8 割に達しました。上限に達すると会話の Push は送れません。Reply は通数に含まれません。本文や秘密は記録していません。";
-export const LINE_QUOTA_80_NOTICE_OPS_JA =
-  "【運営】LINE 送信通数が月間上限の 8 割に達したテナントがあります。本文・token は含みません。";
+export function LINE_QUOTA_80_NOTICE_TENANT_ADMIN_BODY_OF(p: {
+  employeeDisplayName: string;
+  used: number;
+  limit: number;
+}): string {
+  return `このテナントの LINE 公式アカウント「${p.employeeDisplayName}」の送信通数が、今月の上限の 8 割に達しました（${p.used} / ${p.limit}）。上限に達すると会話の Push は送れず、承認カードはメールに切り替わります。LINE のプラン変更を検討してください。Reply は通数に含まれません。`;
+}
+export const LINE_QUOTA_80_NOTICE_TENANT_ADMIN_BODY_JA = LINE_QUOTA_80_NOTICE_TENANT_ADMIN_BODY_OF({
+  employeeDisplayName: "（社員）",
+  used: 0,
+  limit: 0,
+});
+export function LINE_QUOTA_80_NOTICE_OPS_OF(p: {
+  orgName: string;
+  orgId: string;
+  employeeDisplayName: string;
+  used: number;
+  limit: number;
+}): string {
+  return `【運営】LINE 送信通数が月間上限の 8 割に達しました（org ${p.orgName} / ${p.orgId} / 社員 ${p.employeeDisplayName} / ${p.used} / ${p.limit}）。本文・token は含みません。`;
+}
+export const LINE_QUOTA_80_NOTICE_OPS_JA = LINE_QUOTA_80_NOTICE_OPS_OF({
+  orgName: "（テナント）",
+  orgId: "（org_id）",
+  employeeDisplayName: "（社員）",
+  used: 0,
+  limit: 0,
+});
 
 /** U-20 (later PR): monthly-limit fallback mail goes to that tenant's approvers. */
 export const LINE_QUOTA_EXCEEDED_APPROVER_SUBJECT_JA =
   "【Staffpass】LINE の月間通数上限のため、承認をメールでお送りします";
 export const LINE_QUOTA_EXCEEDED_APPROVER_BODY_JA =
-  "LINE の月間通数上限に達したため、承認カードを LINE ではなくメールで送ります。他テナントの承認者には届きません。";
+  "LINE の月間通数上限に達したため、承認カードを LINE ではなくメールで送ります。来月のリセット、または LINE のプラン変更まで続きます。";

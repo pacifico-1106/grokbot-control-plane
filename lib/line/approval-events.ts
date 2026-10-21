@@ -41,10 +41,17 @@ import {
 } from "@/lib/notify/line";
 import {
   LINE_APPROVER_LINK_ERROR_JA,
+  LINE_APPROVER_LINK_FAIL_JA,
   LINE_APPROVER_LINK_GROUP_JA,
   LINE_APPROVER_LINK_INVALID_JA,
   LINE_APPROVER_LINK_OK_JA,
+  LINE_WEB_ONLY_APPROVE_JA_OF,
+  LINE_WEB_ONLY_APPROVE_PATH,
 } from "@/lib/comm/line-poc-copy";
+import { isLineWebOnlyHighRiskEnabled } from "@/lib/comm/flags";
+import { lineWebOnlyHighRiskVerdict } from "@/lib/comm/line-web-only-high-risk";
+import { isLineLinkCodeLimitsEnabled } from "@/lib/line/link-code-limits";
+import { getAppOrigin } from "@/lib/approvals/tokens";
 
 export type LineApprovalSource = { type?: string; userId?: string; groupId?: string; roomId?: string };
 export type LineApprovalEvent = {
@@ -113,7 +120,12 @@ export async function handleLineApproverLinkCode(
     lineUserId,
   });
   if (!consumed.ok) {
-    await reply(channel, event, consumed.replyJa ?? (consumed.reason === "invalid_or_expired" ? MSG_LINK_INVALID : MSG_LINK_ERROR));
+    // L1: flag ON → one opaque fail (same as conversation). Flag OFF keeps
+    // production approver copy (invalid vs error vs replyJa).
+    const failJa = isLineLinkCodeLimitsEnabled()
+      ? LINE_APPROVER_LINK_FAIL_JA
+      : consumed.replyJa ?? (consumed.reason === "invalid_or_expired" ? MSG_LINK_INVALID : MSG_LINK_ERROR);
+    await reply(channel, event, failJa);
     if (consumed.reason !== "invalid_or_expired" && consumed.reason !== "sender_locked" && consumed.reason !== "account_locked") {
       console.error("line_link_code_consume_failed", { channelId: channel.id, reason: consumed.reason });
     }
@@ -144,7 +156,15 @@ export async function handleLineApproverLinkCode(
       ...(bound.ok ? {} : { reason: bound.reason }),
     },
   }).catch(() => undefined);
-  await reply(channel, event, bound.ok ? MSG_LINK_OK : bound.messageJa);
+  await reply(
+    channel,
+    event,
+    bound.ok
+      ? MSG_LINK_OK
+      : isLineLinkCodeLimitsEnabled()
+        ? LINE_APPROVER_LINK_FAIL_JA
+        : bound.messageJa
+  );
   return true;
 }
 
@@ -187,6 +207,41 @@ async function handlePostback(channel: NotificationChannelRuntime, event: LineAp
   if (!gate.allowed) {
     await reply(channel, event, gate.reason === "missing_user_id" ? MSG_NO_USER : MSG_FORBIDDEN);
     return;
+  }
+  if (match[1] === "a" && isLineWebOnlyHighRiskEnabled(channel.orgId)) {
+    const verdict = lineWebOnlyHighRiskVerdict(approval);
+    if (verdict.refuse) {
+      try {
+        await appendAuditEvent({
+          orgId: channel.orgId,
+          employeeId: approval.employeeId,
+          credentialId: null,
+          action: "line.web_only_refused",
+          purpose: approval.purpose ?? null,
+          summary: "LINE postback refused high-risk approval (web only until passkeys)",
+          metadata: {
+            event: "line_web_only_high_risk",
+            approvalId: approval.id,
+            reason: verdict.reason,
+            category: verdict.category,
+            webPath: LINE_WEB_ONLY_APPROVE_PATH,
+          },
+        });
+      } catch (err) {
+        console.error("line_web_only_refused_audit_failed", {
+          orgId: channel.orgId,
+          approvalId: approval.id,
+          reason: verdict.reason,
+          err,
+        });
+      }
+      await reply(
+        channel,
+        event,
+        LINE_WEB_ONLY_APPROVE_JA_OF(`${getAppOrigin()}${LINE_WEB_ONLY_APPROVE_PATH}`)
+      );
+      return;
+    }
   }
   if (match[1] === "e") {
     if ((await initializeWorkflowForApproval(approval, approval.employeeId || null)).instance) {

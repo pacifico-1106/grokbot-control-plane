@@ -32,6 +32,7 @@ import { getOrgApprovalWorkflowPolicy } from "@/lib/approval-workflow/data";
 import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
 import { approverFilingStop } from "@/lib/approver-authority/filing";
 import { ADMIN_TOOL_TITLE_JA } from "@/lib/admin-mcp/tool-titles-ja";
+import { approvalTicketPolicyMetadata } from "@/lib/comm/line-web-only-high-risk";
 
 export { ADMIN_TOOL_TITLE_JA };
 
@@ -241,6 +242,17 @@ export async function queueAdminTool(input: {
       auditClass: ADMIN_AUDIT_CLASS,
     };
   }
+  const policyMeta = approvalTicketPolicyMetadata({
+    tool: input.tool,
+    purpose: auditAction,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalClass: ADMIN_AUDIT_CLASS,
+      always_human: true,
+      adminTool: input.tool,
+      isAdminMcpTool: true,
+    },
+  });
   const created = await createApproval({
     orgId: input.cred.orgId,
     employeeId: "",
@@ -253,9 +265,11 @@ export async function queueAdminTool(input: {
     jobId,
     metadata: {
       auditClass: ADMIN_AUDIT_CLASS,
-      approvalClass: ADMIN_AUDIT_CLASS,
+      approvalClass: policyMeta.approvalClass,
       auditAction,
-      always_human: true,
+      always_human: policyMeta.always_human,
+      approvalPolicy: policyMeta.approvalPolicy,
+      employeeAlwaysHuman: policyMeta.employeeAlwaysHuman,
       adminTool: input.tool,
       isAdminMcpTool: true,
       adminMutation: input.args,
