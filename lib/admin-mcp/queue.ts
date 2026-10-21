@@ -242,6 +242,17 @@ export async function queueAdminTool(input: {
       auditClass: ADMIN_AUDIT_CLASS,
     };
   }
+  const policyMeta = approvalTicketPolicyMetadata({
+    tool: input.tool,
+    purpose: auditAction,
+    metadata: {
+      auditClass: ADMIN_AUDIT_CLASS,
+      approvalClass: ADMIN_AUDIT_CLASS,
+      always_human: true,
+      adminTool: input.tool,
+      isAdminMcpTool: true,
+    },
+  });
   const created = await createApproval({
     orgId: input.cred.orgId,
     employeeId: "",
@@ -254,25 +265,16 @@ export async function queueAdminTool(input: {
     jobId,
     metadata: {
       auditClass: ADMIN_AUDIT_CLASS,
-      approvalClass: ADMIN_AUDIT_CLASS,
+      approvalClass: policyMeta.approvalClass,
       auditAction,
-      always_human: true,
+      always_human: policyMeta.always_human,
+      approvalPolicy: policyMeta.approvalPolicy,
+      employeeAlwaysHuman: policyMeta.employeeAlwaysHuman,
       adminTool: input.tool,
       isAdminMcpTool: true,
       adminMutation: input.args,
       adminRequester: requester,
       ...requesterExtra,
-      ...approvalTicketPolicyMetadata({
-        tool: input.tool,
-        purpose: auditAction,
-        metadata: {
-          auditClass: ADMIN_AUDIT_CLASS,
-          approvalClass: ADMIN_AUDIT_CLASS,
-          always_human: true,
-          adminTool: input.tool,
-          isAdminMcpTool: true,
-        },
-      }),
     },
   });
 

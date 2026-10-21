@@ -561,6 +561,14 @@ async function createNeedsApprovalResponse(opts: {
   let demoStore: string | null = null;
   let createdApproval: Awaited<ReturnType<typeof createApproval>>["approval"] | null = null;
 
+  const policyMeta = approvalTicketPolicyMetadata({
+    tool: opts.tool,
+    purpose: opts.purpose,
+    employeeApprovalPolicy: opts.employee?.approvalPolicy,
+    toolHint: opts.employee?.toolApprovalDefaults?.[opts.tool],
+    metadata: opts.metadata,
+  });
+
   try {
     const created = await createApproval({
       orgId: opts.orgId,
@@ -575,13 +583,10 @@ async function createNeedsApprovalResponse(opts: {
       parentApprovalId: opts.parentApprovalId,
       metadata: {
         ...(opts.metadata ?? {}),
-        ...approvalTicketPolicyMetadata({
-          tool: opts.tool,
-          purpose: opts.purpose,
-          employeeApprovalPolicy: opts.employee?.approvalPolicy,
-          toolHint: opts.employee?.toolApprovalDefaults?.[opts.tool],
-          metadata: opts.metadata,
-        }),
+        approvalPolicy: policyMeta.approvalPolicy,
+        employeeAlwaysHuman: policyMeta.employeeAlwaysHuman,
+        approvalClass: policyMeta.approvalClass,
+        always_human: policyMeta.always_human,
         artifact,
         invoke: invokeSnapshot,
         // mail.send: pin the exact approved content (digests only) so an
