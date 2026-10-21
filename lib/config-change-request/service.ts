@@ -10,6 +10,8 @@
  * - Applies exactly the stored proposal; Instructions use a base-hash check so
  *   an approver never approves a diff that no longer matches reality.
  */
+import { isLineWebOnlyHighRiskEnabled } from "@/lib/comm/flags";
+import { approvalTicketPolicyMetadata } from "@/lib/comm/line-web-only-high-risk";
 import { isConfigChangeRequestEnabled, isInboxRoutingEnabled } from "@/lib/feature-flags";
 import { appendAuditEvent } from "@/lib/data/audit";
 import {
@@ -415,6 +417,21 @@ export async function createConfigChangeRequest(
       auditClass: CONFIG_CHANGE_APPROVAL_CLASS,
       always_human: true,
       configChange,
+      ...(isLineWebOnlyHighRiskEnabled(input.orgId)
+        ? (() => {
+            const policyMeta = approvalTicketPolicyMetadata({
+              tool: CONFIG_CHANGE_TOOL,
+              purpose: CONFIG_CHANGE_PURPOSE,
+              metadata: { always_human: true, auditClass: CONFIG_CHANGE_APPROVAL_CLASS },
+            });
+            return {
+              approvalPolicy: policyMeta.approvalPolicy,
+              employeeAlwaysHuman: policyMeta.employeeAlwaysHuman,
+              approvalClass: policyMeta.approvalClass,
+              always_human: policyMeta.always_human,
+            };
+          })()
+        : {}),
     },
   });
 

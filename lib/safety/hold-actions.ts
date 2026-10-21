@@ -17,6 +17,8 @@
 import type { OrgMember } from "@/lib/types";
 import { isDemoMode } from "@/lib/mode";
 import { createSupabaseAdminClient } from "@/lib/supabase";
+import { isLineWebOnlyHighRiskEnabled } from "@/lib/comm/flags";
+import { approvalTicketPolicyMetadata } from "@/lib/comm/line-web-only-high-risk";
 import { appendAuditEvent } from "@/lib/data/audit";
 import { createApproval, getApprovalById } from "@/lib/data/approvals";
 import { demoGetApproval, demoUpdateApproval } from "@/lib/data/demo-approvals-store";
@@ -276,6 +278,21 @@ export async function requestHoldRelease(input: {
     risk: "high", tool: HOLD_RELEASE_TOOL,
     metadata: {
       auditClass: "admin", approvalClass: "admin", always_human: true, adminTool: HOLD_RELEASE_TOOL,
+      ...(isLineWebOnlyHighRiskEnabled(input.orgId)
+        ? (() => {
+            const policyMeta = approvalTicketPolicyMetadata({
+              tool: HOLD_RELEASE_TOOL,
+              purpose: "employee.hold.release",
+              metadata: { auditClass: "admin", always_human: true, adminTool: HOLD_RELEASE_TOOL },
+            });
+            return {
+              approvalPolicy: policyMeta.approvalPolicy,
+              employeeAlwaysHuman: policyMeta.employeeAlwaysHuman,
+              approvalClass: policyMeta.approvalClass,
+              always_human: policyMeta.always_human,
+            };
+          })()
+        : {}),
       holdId: hold.id, holdEmployeeId: hold.employeeId, holdKind: hold.kind,
       requestedBy, requesterMemberId: actor.member.id, requesterIdentity: requestedBy,
       releaseSurfaces: [...HOLD_RELEASE_SURFACES], requestedVia: actor.surface,

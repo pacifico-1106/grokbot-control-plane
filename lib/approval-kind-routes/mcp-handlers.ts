@@ -20,6 +20,8 @@ import { getEffectiveApprovalWorkflowPolicy } from "@/lib/approval-workflow";
 import { validateApprovalRoutes, type ValidatorContext } from "./validate";
 import type { OrgApprovalKindRoutesPolicy, ApprovalKind } from "./types";
 import { APPROVAL_KINDS } from "./types";
+import { isLineWebOnlyHighRiskEnabled } from "@/lib/comm/flags";
+import { approvalTicketPolicyMetadata } from "@/lib/comm/line-web-only-high-risk";
 import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
 
 export interface ApprovalRoutesGetResult {
@@ -543,7 +545,24 @@ export async function handleDeputyActivate(
     risk: "medium",
     tool: "decision.deputyActivate",
     jobId: `deputy_${approvalId}_${deputyUserId}`,
-    metadata: deputyMetadata,
+    metadata: {
+      ...deputyMetadata,
+      ...(isLineWebOnlyHighRiskEnabled(cred.orgId)
+        ? (() => {
+            const policyMeta = approvalTicketPolicyMetadata({
+              tool: "decision.deputyActivate",
+              purpose: "decision.deputy_activate",
+              metadata: deputyMetadata,
+            });
+            return {
+              approvalPolicy: policyMeta.approvalPolicy,
+              employeeAlwaysHuman: policyMeta.employeeAlwaysHuman,
+              approvalClass: policyMeta.approvalClass,
+              always_human: policyMeta.always_human,
+            };
+          })()
+        : {}),
+    },
   });
 
   await appendAuditEvent({

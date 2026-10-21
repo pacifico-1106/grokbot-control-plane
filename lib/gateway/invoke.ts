@@ -66,8 +66,8 @@ import {
   lineSendAsPosted,
   lineWaiveExternalDeny,
 } from "@/lib/comm/line-invoke";
-import { isLineConversationEnabled } from "@/lib/comm/flags";
-import { approvalTicketPolicyMetadata } from "@/lib/comm/line-web-only-high-risk";
+import { isLineConversationEnabled, isLineWebOnlyHighRiskEnabled } from "@/lib/comm/flags";
+import { approvalTicketPolicyStamp } from "@/lib/comm/line-web-only-high-risk";
 import { conversationTokenCounterparty, conversationTokenFromRequest } from "@/lib/comm/conversation-token";
 import { evaluateProjectScope } from "@/lib/gateway/project-scope";
 import { accessibleProjects } from "@/lib/employees/project-access";
@@ -561,13 +561,15 @@ async function createNeedsApprovalResponse(opts: {
   let demoStore: string | null = null;
   let createdApproval: Awaited<ReturnType<typeof createApproval>>["approval"] | null = null;
 
-  const policyMeta = approvalTicketPolicyMetadata({
-    tool: opts.tool,
-    purpose: opts.purpose,
-    employeeApprovalPolicy: opts.employee?.approvalPolicy,
-    toolHint: opts.employee?.toolApprovalDefaults?.[opts.tool],
-    metadata: opts.metadata,
-  });
+  const policyMeta = isLineWebOnlyHighRiskEnabled(opts.orgId)
+    ? approvalTicketPolicyStamp(opts.orgId, {
+        tool: opts.tool,
+        purpose: opts.purpose,
+        employeeApprovalPolicy: opts.employee?.approvalPolicy,
+        toolHint: opts.employee?.toolApprovalDefaults?.[opts.tool],
+        metadata: opts.metadata,
+      })
+    : {};
 
   try {
     const created = await createApproval({
@@ -583,10 +585,14 @@ async function createNeedsApprovalResponse(opts: {
       parentApprovalId: opts.parentApprovalId,
       metadata: {
         ...(opts.metadata ?? {}),
-        approvalPolicy: policyMeta.approvalPolicy,
-        employeeAlwaysHuman: policyMeta.employeeAlwaysHuman,
-        approvalClass: policyMeta.approvalClass,
-        always_human: policyMeta.always_human,
+        ...(isLineWebOnlyHighRiskEnabled(opts.orgId)
+          ? {
+              approvalPolicy: policyMeta.approvalPolicy,
+              employeeAlwaysHuman: policyMeta.employeeAlwaysHuman,
+              approvalClass: policyMeta.approvalClass,
+              always_human: policyMeta.always_human,
+            }
+          : {}),
         artifact,
         invoke: invokeSnapshot,
         // mail.send: pin the exact approved content (digests only) so an
