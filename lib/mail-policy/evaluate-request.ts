@@ -45,6 +45,7 @@ export async function evaluateMailPolicyForRequest(input: {
     internalAudienceRule: internalRule,
     ingressHandoffPolicy: d1Effective.policy,
     sealithTransferId,
+    orgId: input.orgId,
   });
   return { decision, to: primary.to, sources: primary.sources };
 }
