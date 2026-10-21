@@ -31,6 +31,7 @@ import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
 import { approverAuthorityRecordForFiling, approverRequirementForFiling } from "@/lib/approver-authority/filing";
 import { checkApproverAuthority, recordApproverAuthority } from "@/lib/approver-authority/verify";
 import { requesterMemberIdsFromMetadata } from "@/lib/approver-authority/decide";
+import { isConfigChangePartyAudienceApproval } from "@/lib/config-change-request/core";
 
 function looksLikeUuid(value: string | null | undefined): boolean {
   return Boolean(
@@ -491,11 +492,15 @@ export async function resolveApprovalWithoutWorkflowDetailed(
         grokBotAgentId: opts.grokBotAgentId,
       });
     }
-    if (enforceAuthority && existing.requiredApproverKind) {
+    // H1: party_audience tickets must enforce owner_or_designated_admin regardless of APPROVER_AUTHORITY_ENABLED
+    const isPartyAudience = isConfigChangePartyAudienceApproval(existing);
+    const mustEnforceAuthority = (enforceAuthority && existing.requiredApproverKind) || 
+      (status === "approved" && isPartyAudience && existing.requiredApproverKind);
+    if (mustEnforceAuthority) {
       const decision = await checkApproverAuthority({
         orgId,
         memberId: opts.memberId,
-        requiredKind: existing.requiredApproverKind,
+        requiredKind: existing.requiredApproverKind!,
         requesterMemberIds: requesterMemberIdsFromMetadata(existing.metadata),
       });
       if (decision.outcome === "deny") return { approval: null, reason: decision.reason };

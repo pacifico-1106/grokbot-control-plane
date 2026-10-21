@@ -25,6 +25,7 @@ import { isHoldReleaseTicket } from "@/lib/safety/hold-config";
 import { isLineWebOnlyHighRiskEnabled } from "@/lib/comm/flags";
 import { isLineSurfaceApproval, lineWebOnlyHighRiskVerdict } from "@/lib/comm/line-web-only-high-risk";
 import { PROMOTE_OWNER_TOOL } from "@/lib/approver-authority/targets";
+import { isConfigChangePartyAudienceApproval } from "@/lib/config-change-request/core";
 import { createSupabaseAdminClient } from "@/lib/supabase";
 import { withDemoWorkflowLock } from "@/lib/approval-workflow/lock";
 import { getBallotsByInstanceId, demoWorkflowVoterIsCurrent } from "@/lib/approval-workflow/data";
@@ -188,7 +189,10 @@ async function resolveWorkflow(
 
   // PR-D: on approver-authority tickets the pressing Slack / LINE / Telegram
   // user must be linked to the member who counts as the approver (fail closed).
-  if (status === "approved" && isApproverAuthorityEnabled() && approval.requiredApproverKind) {
+  // H1: party_audience tickets enforce owner_or_designated_admin regardless of APPROVER_AUTHORITY_ENABLED.
+  const isPartyAudience = isConfigChangePartyAudienceApproval(approval);
+  const enforceIdentity = status === "approved" && (isApproverAuthorityEnabled() || isPartyAudience) && approval.requiredApproverKind;
+  if (enforceIdentity) {
     const identity = await verifyApproverIdentity(orgId, opts);
     if (!identity.ok) return authorityStop(approval, identity.reason, false);
     opts = { ...opts, memberId: identity.memberId };
@@ -212,6 +216,7 @@ async function resolveWorkflow(
     // P0 Item 5: Record decisionId for W1 replay protection when strict mode is ON
     // PR-D: flag ON → the W1 RPC also verifies the approver and reports why not.
     // Flag OFF → exactly today's call.
+    // H1: party_audience tickets use detailed resolver regardless of APPROVER_AUTHORITY_ENABLED.
     const w1Opts = {
       memberId: opts.memberId,
       revisionNote: opts.revisionNote,
@@ -220,19 +225,20 @@ async function resolveWorkflow(
       decisionId: opts.decisionId,
       externalVoter: opts.externalVoter,
     };
-    const { approval: resolved, reason } = isApproverAuthorityEnabled()
+    const useDetailedResolver = isApproverAuthorityEnabled() || isPartyAudience;
+    const { approval: resolved, reason } = useDetailedResolver
       ? await approvalsData.resolveApprovalWithoutWorkflowDetailed(id, status, resolvedBy, orgId, w1Opts)
       : { approval: await baseResolveApproval(id, status, resolvedBy, orgId, w1Opts), reason: "resolve_failed" };
 
     return {
       ok: Boolean(resolved),
-      approval: resolved ?? (isApproverAuthorityEnabled() ? approval : null),
+      approval: resolved ?? (useDetailedResolver ? approval : null),
       workflowApplied: false,
       workflowComplete: Boolean(resolved),
       workflowApproved: resolved?.status === "approved",
       workflowRejected: resolved?.status === "rejected",
       progress: null,
-      reason: resolved ? "resolved_no_workflow" : isApproverAuthorityEnabled() ? reason : "resolve_failed",
+      reason: resolved ? "resolved_no_workflow" : useDetailedResolver ? reason : "resolve_failed",
     };
   }
 
@@ -257,8 +263,9 @@ async function resolveWorkflow(
   // PR-D: on approver-authority tickets only an owner / designated admin may cast
   // an approve ballot; a designated admin on an owner ticket is recorded as an
   // endorsement instead (no ballot, ticket stays pending).
+  // H1: party_audience tickets enforce authority regardless of APPROVER_AUTHORITY_ENABLED.
   const authorityMemberId = (opts.memberId || opts.voterUserId || "").trim();
-  const enforceAuthority = vote === "approve" && isApproverAuthorityEnabled() && Boolean(approval.requiredApproverKind);
+  const enforceAuthority = vote === "approve" && (isApproverAuthorityEnabled() || isPartyAudience) && Boolean(approval.requiredApproverKind);
   if (enforceAuthority) {
     const decision = await checkApproverAuthority({
       orgId,

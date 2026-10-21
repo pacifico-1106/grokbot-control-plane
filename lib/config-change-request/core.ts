@@ -492,6 +492,18 @@ export function isConfigChangeApproval(approval: {
   return tool === CONFIG_CHANGE_TOOL && parseConfigChangeMetadata(approval.metadata) !== null;
 }
 
+/**
+ * H1: True for party_audience tickets created by surface guard redirect.
+ * These tickets require owner_or_designated_admin approval regardless of APPROVER_AUTHORITY_ENABLED.
+ */
+export function isConfigChangePartyAudienceApproval(approval: {
+  tool?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): boolean {
+  const meta = parseConfigChangeMetadata(approval.metadata);
+  return meta?.proposal?.kind === "party_audience";
+}
+
 export const CONFIG_CHANGE_APPROVAL_CLASS = BUSINESS_AUDIT_CLASS;
 
 export type ConfigChangeApplied = {
