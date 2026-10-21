@@ -71,6 +71,9 @@ describe("LP customer copy: no Grok Bot; 推奨：Cursor", () => {
       expect(h).not.toContain("LINE・Slackのボタン");
       expect(h).not.toContain("メール・LINE・Slackで承認");
       expect(h).not.toContain("メール / LINE / Slack");
+      expect(h).toContain("提供予定（オプション、従量課金）");
+      expect(h).toContain("電話応対オプション");
+      expect(h).not.toMatch(/Twilio/i);
     }
     const metas = [originalMetadata, corpMetadata];
     for (const m of metas) {
