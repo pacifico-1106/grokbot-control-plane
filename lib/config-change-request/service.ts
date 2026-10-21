@@ -62,6 +62,14 @@ import {
 } from "./core";
 import type { Audience, OrgPartyKind } from "@/lib/types";
 import { validatePartiesUpsertArgs } from "@/lib/channel-classify/core";
+import { listMembers, normalizeMemberEmail } from "@/lib/data/members";
+import { listVoterBindings } from "@/lib/approval-workflow/voter-binding";
+import { demoUpdateApproval } from "@/lib/data/demo-approvals-store";
+import { isDemoMode } from "@/lib/mode";
+import { createSupabaseAdminClient } from "@/lib/supabase";
+import { checkOperable } from "@/lib/safety/hold";
+import type { ConfigChangeRequester } from "./core";
+import type { RequiredApproverKind } from "@/lib/approver-authority/targets";
 
 export type ApproverResolution =
   | { ok: true; surface: "slack_dm" | "slack" | "telegram" | "line"; channelId: string | null }
@@ -100,6 +108,51 @@ async function defaultNotify(approval: ApprovalRequest, employee: Employee): Pro
   const { sendApprovalNotifications } = await import("@/lib/notify/channels");
   const results = await sendApprovalNotifications(approval, employee).catch(() => []);
   return results.some((item) => item.ok);
+}
+
+/**
+ * M1: Resolve requester to org member for self-approval blocking.
+ * Priority: slackUserId (via voter binding) > email (direct match).
+ * Returns null when the requester cannot be identified.
+ */
+export type RequesterMemberResolution =
+  | { ok: true; memberId: string; displayName: string; source: "voter_binding" | "email_match" }
+  | { ok: false; reason: "no_identifier" | "no_binding" | "no_member" | "member_not_active" };
+
+async function resolveRequesterMember(
+  orgId: string,
+  requester: ConfigChangeRequester | null | undefined
+): Promise<RequesterMemberResolution> {
+  if (!requester) return { ok: false, reason: "no_identifier" };
+
+  // Try Slack user ID via voter binding first (most reliable)
+  if (requester.slackUserId) {
+    const bindings = (await listVoterBindings({ orgId, provider: "slack" }).catch(() => []))
+      .filter((b) => b.orgId === orgId && b.externalUserId === requester.slackUserId && b.status === "active" && b.memberId);
+    const memberIds = [...new Set(bindings.map((b) => b.memberId))];
+    if (memberIds.length === 1) {
+      const members = await listMembers(orgId).catch(() => []);
+      const member = members.find((m) => m.id === memberIds[0] && m.orgId === orgId);
+      if (member && member.status === "active") {
+        return { ok: true, memberId: member.id, displayName: member.displayName || member.id, source: "voter_binding" };
+      }
+      if (member) return { ok: false, reason: "member_not_active" };
+    }
+  }
+
+  // Try email match
+  if (requester.email) {
+    const normalizedEmail = normalizeMemberEmail(requester.email);
+    const members = await listMembers(orgId).catch(() => []);
+    const member = members.find((m) => m.orgId === orgId && normalizeMemberEmail(m.email) === normalizedEmail);
+    if (member && member.status === "active") {
+      return { ok: true, memberId: member.id, displayName: member.displayName || member.id, source: "email_match" };
+    }
+    if (member) return { ok: false, reason: "member_not_active" };
+    return { ok: false, reason: "no_member" };
+  }
+
+  return { ok: false, reason: "no_identifier" };
 }
 
 export type ConfigChangeDeps = {
@@ -231,7 +284,7 @@ async function auditRefusal(
 }
 
 const SURFACE_NOT_SUPPORTED_MESSAGE_JA =
-  "この surface のチャネル分類は、resolveAudience で参照されないため効果がありません。" +
+  "この surface のチャネル分類は、resolveAudience で参照されないため効果がありません。何も登録していません。" +
   "メールアドレスの場合は parties.upsert（kind=mail_address）、" +
   "ドメイン全体の場合は internalAudienceRule.patch を使ってください。";
 
@@ -245,26 +298,56 @@ function classificationToAudience(
   return classification === "internal" ? "internal" : "external";
 }
 
-// M2: simple email format check (@ present, not at start/end, no consecutive dots)
+// M2/L: email format check (@ present, not at start/end, no consecutive dots)
 const BASIC_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// L: consecutive dots are invalid
+const CONSECUTIVE_DOTS_RE = /\.\./;
 
 function applySurfaceGuard(
   proposal: { surface: string; externalId: string; classification: "internal" | "shared_external" | "unknown" },
   employeeId: string
 ): SurfaceGuardResult {
   if (proposal.surface === "mail") {
-    // M2: strip mail: prefix if present
     let identifier = proposal.externalId;
+
+    // L: reject MAIL: (uppercase) - only lowercase mail: is accepted
+    if (/^MAIL:/i.test(identifier) && !identifier.startsWith("mail:")) {
+      return {
+        ok: false,
+        code: "invalid_identifier",
+        messageJa: "mail: プレフィックスは小文字で指定してください。何も登録していません。",
+      };
+    }
+
+    // L: strip mail: prefix if present (lowercase only)
     if (identifier.startsWith("mail:")) {
       identifier = identifier.slice(5);
     }
 
-    // M2: validate email format first (stricter than parties.upsert for mail_address redirect)
+    // L: reject mail:mail: (double prefix) - after stripping, it still starts with mail:
+    if (identifier.startsWith("mail:")) {
+      return {
+        ok: false,
+        code: "invalid_identifier",
+        messageJa: "mail: プレフィックスが重複しています。何も登録していません。",
+      };
+    }
+
+    // M2/L: validate email format (@ required)
     if (!BASIC_EMAIL_RE.test(identifier)) {
       return {
         ok: false,
         code: "invalid_identifier",
         messageJa: "メールアドレスの形式が不正です（@ が必要です）。何も登録していません。",
+      };
+    }
+
+    // L: reject consecutive dots (comment says "no consecutive dots")
+    if (CONSECUTIVE_DOTS_RE.test(identifier)) {
+      return {
+        ok: false,
+        code: "invalid_identifier",
+        messageJa: "メールアドレスに連続するドットは使えません。何も登録していません。",
       };
     }
 
@@ -482,6 +565,24 @@ export async function createConfigChangeRequest(
     };
   }
 
+  // M1: party_audience requires requester identification for self-approval blocking
+  const isPartyAudience = proposal.kind === "party_audience";
+  let requesterMember: RequesterMemberResolution | null = null;
+  if (isPartyAudience) {
+    requesterMember = await resolveRequesterMember(input.orgId, value.requestedBy);
+    if (!requesterMember.ok) {
+      await auditRefusal(employee, input.credentialId, "requester_not_identified", { reason: requesterMember.reason });
+      return {
+        ok: false,
+        code: "requester_not_identified",
+        applied: false,
+        reason: requesterMember.reason,
+        messageJa:
+          "依頼者を特定できませんでした。requestedBy に slackUserId（承認者登録で照合）または email（org メンバーのメールアドレス）を指定してください。何も登録していません。",
+      };
+    }
+  }
+
   const diff = buildDiff(proposal, before);
   let summary = buildApproverMessageJa({
     requester: value.requestedBy,
@@ -515,17 +616,21 @@ export async function createConfigChangeRequest(
   };
 
   // M1: party_audience uses admin class (same as parties.upsert) for self-approval blocking
-  const isPartyAudience = proposal.kind === "party_audience";
   const approvalClass = isPartyAudience ? ADMIN_AUDIT_CLASS : CONFIG_CHANGE_APPROVAL_CLASS;
 
   // M1: adminRequester enables assertNotSelfApproval for admin-class tickets
-  const adminRequester = isPartyAudience
+  // kind is "employee_badge" for config.change_request (not admin_agent)
+  const adminRequester = isPartyAudience && requesterMember?.ok
     ? {
-        kind: "admin_agent" as const,
+        kind: "employee_badge" as const,
         grokBotAgentId: null,
         actorId: input.credentialId || null,
+        memberId: requesterMember.memberId,
       }
     : undefined;
+
+  // M1: requesterMemberId enables self-approval blocking via requesterMemberIdsFromMetadata
+  const requesterMemberId = isPartyAudience && requesterMember?.ok ? requesterMember.memberId : undefined;
 
   const created = await createApproval({
     orgId: input.orgId,
@@ -543,8 +648,28 @@ export async function createConfigChangeRequest(
       always_human: true,
       configChange,
       ...(adminRequester ? { adminRequester } : {}),
+      ...(requesterMemberId ? { requesterMemberId } : {}),
     },
   });
+
+  // M1: party_audience requires owner_or_designated_admin (APPROVER_AUTHORITY)
+  if (isPartyAudience) {
+    const requiredKind: RequiredApproverKind = "owner_or_designated_admin";
+    if (isDemoMode()) {
+      await demoUpdateApproval(created.approval.id, { requiredApproverKind: requiredKind });
+      created.approval.requiredApproverKind = requiredKind;
+    } else {
+      const admin = createSupabaseAdminClient();
+      if (admin) {
+        await admin
+          .from("approval_requests")
+          .update({ required_approver_kind: requiredKind })
+          .eq("id", created.approval.id)
+          .eq("org_id", input.orgId);
+        created.approval.requiredApproverKind = requiredKind;
+      }
+    }
+  }
 
   await appendAuditEvent({
     orgId: input.orgId,
@@ -618,6 +743,13 @@ async function applyConfigChange(approval: ApprovalRequest): Promise<ConfigChang
   if (meta.employeeId !== approval.employeeId) return fail("approval_target_mismatch");
   const employee = await getEmployee(approval.employeeId, approval.orgId);
   if (!employee || employee.status !== "active") return fail("employee_not_active");
+
+  // M2': party_audience must check employee hold even for admin-class tickets
+  const isPartyAudienceProposal = meta.proposal.kind === "party_audience";
+  if (isPartyAudienceProposal) {
+    const holdResult = await checkOperable({ orgId: approval.orgId, employeeId: approval.employeeId, phase: "approval_execution" });
+    if (!holdResult.ok) return fail(holdResult.code === "employee_on_hold" ? "employee_on_hold" : "hold_state_unavailable");
+  }
 
   const proposal = meta.proposal;
 
