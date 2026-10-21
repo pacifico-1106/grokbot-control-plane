@@ -5,6 +5,7 @@
  * Never persist secrets, full hashes, or full secret prefixes.
  */
 import { parseAdminRequester } from "@/lib/admin-mcp/self-approval";
+import { extractEmail } from "@/lib/audit/mask";
 import { appendAuditEvent } from "@/lib/data/audit";
 import type { AuditAction, AuditEvent } from "@/lib/types";
 
@@ -20,6 +21,8 @@ export type AdminAgentAuditActor = {
   actorKind: "admin_agent";
   adminAgentId: string;
   generation: number;
+  /** Human approver email when this write follows an approved ticket. */
+  actorEmail?: string | null;
 };
 
 export type AdminAuditActor = HumanAdminAuditActor | AdminAgentAuditActor;
@@ -61,9 +64,13 @@ export function adminActorMetadata(actor: AdminAuditActor): Record<string, unkno
   };
 }
 
-export function adminActorFromApproval(approval: {
+export type AdminAuditApprovalRef = {
   metadata?: Record<string, unknown> | null;
-}): AdminAuditActor {
+  resolvedBy?: string | null;
+  approverMemberId?: string | null;
+};
+
+export function adminActorFromApproval(approval: AdminAuditApprovalRef): AdminAuditActor {
   const meta = approval.metadata || {};
   const requester = parseAdminRequester(meta);
   if (requester?.actorId) {
@@ -71,26 +78,34 @@ export function adminActorFromApproval(approval: {
     if (generation === undefined || !Number.isFinite(generation)) {
       throw new Error("admin_audit_generation_required");
     }
-    return adminAgentAuditActor(requester.actorId, generation);
+    return withApproverEmail(adminAgentAuditActor(requester.actorId, generation), approval);
   }
   const adminAgentId = typeof meta.adminAgentId === "string" ? meta.adminAgentId.trim() : "";
   if (adminAgentId && Number.isFinite(Number(meta.generation))) {
-    return adminAgentAuditActor(adminAgentId, Number(meta.generation));
+    return withApproverEmail(adminAgentAuditActor(adminAgentId, Number(meta.generation)), approval);
   }
   const email =
+    extractEmail(approval.resolvedBy) ||
     (typeof meta.actorEmail === "string" && meta.actorEmail.trim()) ||
     (typeof meta.platformActorEmail === "string" && meta.platformActorEmail.trim()) ||
     "";
   if (email) {
     const memberId =
-      typeof meta.actorMemberId === "string"
-        ? meta.actorMemberId
-        : typeof meta.platformActorUserId === "string"
-          ? meta.platformActorUserId
-          : null;
+      typeof approval.approverMemberId === "string"
+        ? approval.approverMemberId
+        : typeof meta.actorMemberId === "string"
+          ? meta.actorMemberId
+          : typeof meta.platformActorUserId === "string"
+            ? meta.platformActorUserId
+            : null;
     return humanAdminActor(email, memberId);
   }
   throw new Error("admin_audit_actor_missing");
+}
+
+function withApproverEmail(actor: AdminAgentAuditActor, approval: AdminAuditApprovalRef): AdminAgentAuditActor {
+  const email = extractEmail(approval.resolvedBy);
+  return email ? { ...actor, actorEmail: email } : actor;
 }
 
 export async function adminActorFromOrgAgent(orgId: string): Promise<AdminAuditActor> {
@@ -103,7 +118,7 @@ export async function adminActorFromOrgAgent(orgId: string): Promise<AdminAuditA
 export async function resolveAdminAuditActor(input: {
   cred?: { adminAgentId: string; generation: number } | null;
   human?: { email: string; memberId?: string | null } | null;
-  approval?: { metadata?: Record<string, unknown> | null } | null;
+  approval?: AdminAuditApprovalRef | null;
   orgId?: string | null;
   fallbackHuman?: { email: string; memberId?: string | null } | null;
 }): Promise<AdminAuditActor> {
@@ -115,7 +130,7 @@ export async function resolveAdminAuditActor(input: {
   }
   if (input.approval) {
     try {
-      return adminActorFromApproval(input.approval);
+      return await attachApproverEmail(adminActorFromApproval(input.approval), input.approval, input.orgId);
     } catch {
       /* fall through */
     }
@@ -131,6 +146,23 @@ export async function resolveAdminAuditActor(input: {
     return humanAdminActor(input.fallbackHuman.email, input.fallbackHuman.memberId);
   }
   throw new Error("admin_audit_actor_missing");
+}
+
+async function attachApproverEmail(
+  actor: AdminAuditActor,
+  approval: AdminAuditApprovalRef,
+  orgId?: string | null
+): Promise<AdminAuditActor> {
+  if (actor.actorKind === "human") return actor;
+  if (extractEmail(actor.actorEmail)) return actor;
+  const fromResolved = extractEmail(approval.resolvedBy);
+  if (fromResolved) return { ...actor, actorEmail: fromResolved };
+  const memberId = (approval.approverMemberId || "").trim();
+  if (!memberId || !orgId) return actor;
+  const { getMemberById } = await import("@/lib/data/members");
+  const member = await getMemberById(memberId, orgId).catch(() => null);
+  const email = extractEmail(member?.email);
+  return email ? { ...actor, actorEmail: email } : actor;
 }
 
 function asEmail(value: unknown): string | null {
@@ -294,7 +326,9 @@ export async function appendAdminAuditEvent(
   const actorMeta = adminActorMetadata(event.actor);
   const metadata = { ...(event.metadata ?? {}), ...actorMeta };
   const actorEmail =
-    event.actor.actorKind === "human" ? event.actor.actorEmail : (event.actorEmail ?? null);
+    event.actor.actorKind === "human"
+      ? event.actor.actorEmail
+      : (event.actorEmail ?? event.actor.actorEmail ?? null);
   assertAdminAuditIdentity({ action: event.action, actorEmail, summary: event.summary, metadata });
   await appendAuditEvent({
     orgId: event.orgId,

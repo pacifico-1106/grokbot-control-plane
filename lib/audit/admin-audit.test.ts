@@ -232,6 +232,42 @@ describe("admin audit identity helper", () => {
     );
   });
 
+  test("approved ticket keeps admin_agent identity and records the approver email", async () => {
+    const { adminActorFromApproval, appendAdminAuditEvent } = await import("@/lib/audit/admin-audit");
+    const actor = adminActorFromApproval({
+      resolvedBy: "web:approver@example.com",
+      approverMemberId: "mem_approver",
+      metadata: {
+        adminRequester: {
+          kind: "admin_agent",
+          actorId: "adm_req",
+          grokBotAgentId: "grok_req",
+          credentialGeneration: 4,
+        },
+      },
+    });
+    expect(actor).toMatchObject({
+      actorKind: "admin_agent",
+      adminAgentId: "adm_req",
+      generation: 4,
+      actorEmail: "approver@example.com",
+    });
+    const before = getRuntimeAudit().length;
+    await appendAdminAuditEvent({
+      orgId: DEMO_ORG.id,
+      employeeId: null,
+      credentialId: null,
+      action: "admin.policy",
+      purpose: "admin.policy",
+      summary: "権限を人確認のうえで更新",
+      actor,
+    });
+    const row = getRuntimeAudit()[0];
+    expect(getRuntimeAudit().length).toBeGreaterThan(before);
+    expect(row.actorEmail).toBe("approver@example.com");
+    expect(row.metadata?.actorKind).toBe("admin_agent");
+  });
+
   test("sanitizeAdminRevokeReason refuses secrets and long hex", async () => {
     const { sanitizeAdminRevokeReason } = await import("@/lib/audit/admin-audit");
     expect(sanitizeAdminRevokeReason("key leaked")).toEqual({ ok: true, reason: "key leaked" });
