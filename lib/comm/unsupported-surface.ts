@@ -7,6 +7,8 @@
  * already returns 409). ON: a declared non-Slack surface is refused even when
  * Slack dest fields are also present.
  */
+import { getCommAccountInOrg } from "@/lib/comm/accounts";
+import { conversationTokenFromRequest, verifyConversationToken } from "@/lib/comm/conversation-token";
 import { parseOrgAllowlist } from "@/lib/comm/flags";
 
 function parseFlag(value: string | undefined): boolean {
@@ -44,4 +46,28 @@ export function unsupportedSurfaceDeliveryVerdict(input: {
   if (!surface || surface === "slack") return { refuse: false, surface };
   if (surface === "line" && input.lineConversation) return { refuse: false, surface };
   return { refuse: true, surface };
+}
+
+/**
+ * LINE is the only non-Slack exception, and only with a server-signed 札:
+ * HMAC, presenter org × employee, and the account row for that pair.
+ * A garbage / leaked / swapped token must not skip H1 (no unsendable card).
+ */
+export async function verifiedLineConversationException(input: {
+  body: { conversation?: unknown; args?: unknown; token?: unknown };
+  orgId: string;
+  employeeId: string;
+}): Promise<boolean> {
+  const token = conversationTokenFromRequest(input.body);
+  if (!token) return false;
+  const v = verifyConversationToken(token, { orgId: input.orgId, employeeId: input.employeeId });
+  if (!v.ok) return false;
+  const account = await getCommAccountInOrg(v.target.orgId, v.target.accountId).catch(() => null);
+  if (!account) return false;
+  return (
+    account.orgId === input.orgId &&
+    account.employeeId === input.employeeId &&
+    account.surface === "line" &&
+    account.id === v.target.accountId
+  );
 }

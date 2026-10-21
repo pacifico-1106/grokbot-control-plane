@@ -71,6 +71,7 @@ import {
   declaredConversationSurface,
   isDeliveryUnsupportedSurfaceEnabled,
   unsupportedSurfaceDeliveryVerdict,
+  verifiedLineConversationException,
 } from "@/lib/comm/unsupported-surface";
 import { approvalTicketPolicyMetadata } from "@/lib/comm/line-web-only-high-risk";
 import { conversationTokenCounterparty, conversationTokenFromRequest } from "@/lib/comm/conversation-token";
@@ -1516,9 +1517,14 @@ async function runGatewayInvokeInner(
     const preLine = isLineConversationRequest(preCtx, body, orgId || employee.orgId);
     if (isDeliveryUnsupportedSurfaceEnabled(orgId || employee.orgId)) {
       const declared = declaredConversationSurface(body);
+      const lineException = await verifiedLineConversationException({
+        body,
+        orgId: orgId || employee.orgId,
+        employeeId,
+      });
       const verdict = unsupportedSurfaceDeliveryVerdict({
         surface: declared,
-        lineConversation: preLine,
+        lineConversation: lineException,
       });
       if (verdict.refuse) {
         const info = channelNotSupportedInfo(verdict.surface);
