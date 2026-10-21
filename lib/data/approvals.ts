@@ -395,7 +395,6 @@ export async function createApproval(
       tool: input.tool ?? null,
       jobId: input.jobId ?? null,
       risk: input.risk,
-      pollPath,
     },
   });
 

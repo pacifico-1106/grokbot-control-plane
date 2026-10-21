@@ -28,9 +28,6 @@ export type CardSetupQueueResult =
       code: "needs_approval";
       needs_approval: true;
       approvalId: string | null;
-      statusToken: string | null;
-      pollUrl: string | null;
-      pollPath: string | null;
       pollHint: "continue_polling";
       title: string;
       summary: string;
@@ -133,9 +130,6 @@ export async function queueCardSetupLinkMint(input: {
     code: "needs_approval",
     needs_approval: true,
     approvalId: created.approval.id,
-    statusToken: created.statusToken,
-    pollUrl: created.pollUrl,
-    pollPath: created.approval.pollPath,
     pollHint: "continue_polling",
     title,
     summary: created.approval.summary,

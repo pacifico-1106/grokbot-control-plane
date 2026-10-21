@@ -631,7 +631,6 @@ export function pushRuntimeApproval(
       tool: row.tool,
       jobId: row.jobId,
       risk: row.risk,
-      pollPath: row.pollPath,
     },
     createdAt: new Date().toISOString(),
   });
