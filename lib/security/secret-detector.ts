@@ -488,6 +488,8 @@ function scanString(value: string, ctx: SecretScanContext, fieldPath: string, fu
   const bareUrl = isBareUrl(value);
   let genericText: string | null = null;
   const suspected: SecretFinding[] = [];
+  
+  let authLinks: FirebaseAuthActionLink[] | null = null;
 
   for (const { name, pattern, minLength } of SECRET_PATTERNS) {
     if (name === 'aws_secret_key') {
@@ -500,6 +502,40 @@ function scanString(value: string, ctx: SecretScanContext, fieldPath: string, fu
       const jwtLength = detectJwt(value);
       if (jwtLength !== null) return blockedResult(name, fieldPath, jwtLength);
       continue;
+    }
+    if (name === 'google_api_key' && isSecretAuthActionLinkEnabled()) {
+      authLinks ??= parseFirebaseAuthActionLinks(value);
+      const globalPattern = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
+      for (const match of value.matchAll(globalPattern)) {
+        const matched = match[0];
+        const matchStart = match.index ?? 0;
+        const insideAuthLink = authLinks.some(
+          (link) =>
+            link.apiKeyValue !== null &&
+            link.apiKeyValue.startsWith(matched) &&
+            matchStart >= link.start &&
+            matchStart < link.end
+        );
+        if (!insideAuthLink) {
+          return blockedResult(name, fieldPath, matched.length);
+        }
+      }
+      continue;
+    }
+    if (name === 'api_key_inline' && isSecretAuthActionLinkEnabled()) {
+      authLinks ??= parseFirebaseAuthActionLinks(value);
+      if (authLinks.length > 0) {
+        const match = value.match(pattern);
+        if (match) {
+          const matchStart = match.index ?? 0;
+          const matchEnd = matchStart + match[0].length;
+          const insideAuthLink = authLinks.some(
+            (link) => matchStart >= link.start && matchEnd <= link.end
+          );
+          if (insideAuthLink) continue;
+          return blockedResult(name, fieldPath, match[0].length);
+        }
+      }
     }
     const isGeneric = name === 'base64_long_secret' || name === 'hex_long_secret';
     if (isGeneric && (bareUrl || !full)) continue;
@@ -732,3 +768,155 @@ export const SECRET_DETECTOR_REGEXES_FOR_TEST: ReadonlyArray<{ name: string; pat
   { name: 'allowlist_short_upper', pattern: ALLOWLIST_PATTERNS[2] },
   { name: 'bare_url', pattern: BARE_URL },
 ];
+
+// ---------------------------------------------------------------------------
+// Firebase Auth Action Link Detection (SECRET_AUTH_ACTION_LINK_ENABLED)
+// Handles password reset, email verify, sign-in, and email recovery links.
+// These links contain oobCode (one-time code) and apiKey (Google API key)
+// that should be treated differently from standalone API keys.
+// ---------------------------------------------------------------------------
+
+import { isSecretAuthActionLinkEnabled } from "@/lib/feature-flags";
+
+/** Valid Firebase auth action modes. */
+const FIREBASE_AUTH_MODES = ["resetPassword", "verifyEmail", "signIn", "recoverEmail"] as const;
+type FirebaseAuthMode = typeof FIREBASE_AUTH_MODES[number];
+
+function isFirebaseAuthMode(mode: string): mode is FirebaseAuthMode {
+  return FIREBASE_AUTH_MODES.includes(mode as FirebaseAuthMode);
+}
+
+/** Parsed Firebase auth action link (secrets are NOT exposed). */
+export type FirebaseAuthActionLink = {
+  mode: FirebaseAuthMode;
+  hasOobCode: boolean;
+  hasApiKey: boolean;
+  /** The actual apiKey value — used ONLY for the exception check; never logged. */
+  apiKeyValue: string | null;
+  /** Start and end positions in the source text (for exclusion matching). */
+  start: number;
+  end: number;
+};
+
+/**
+ * URL pattern for Firebase auth action links.
+ * Matches:
+ * - *.firebaseapp.com/__/auth/action
+ * - Custom domains with /__/auth/action path
+ * Path must be exactly /__/auth/action (Firebase standard).
+ */
+const FIREBASE_AUTH_URL_PATTERN = /https?:\/\/[A-Za-z0-9.-]+\/__\/auth\/action\?[^\s"'<>]*/gi;
+
+/**
+ * Parse Firebase auth action links from text.
+ * URLs are fully parsed (not regex-only) to ensure correct parameter extraction.
+ * 
+ * SECURITY: apiKeyValue is extracted for the exception check but MUST NOT be
+ * logged, returned in errors, or included in audit records.
+ */
+export function parseFirebaseAuthActionLinks(text: string): FirebaseAuthActionLink[] {
+  if (!isSecretAuthActionLinkEnabled()) return [];
+  
+  const results: FirebaseAuthActionLink[] = [];
+  
+  for (const match of text.matchAll(FIREBASE_AUTH_URL_PATTERN)) {
+    const urlString = match[0];
+    const start = match.index ?? 0;
+    const end = start + urlString.length;
+    
+    try {
+      const url = new URL(urlString);
+      
+      const mode = url.searchParams.get("mode");
+      const oobCode = url.searchParams.get("oobCode");
+      const apiKey = url.searchParams.get("apiKey");
+      
+      if (!mode || !isFirebaseAuthMode(mode)) continue;
+      if (!oobCode) continue;
+      
+      results.push({
+        mode,
+        hasOobCode: true,
+        hasApiKey: Boolean(apiKey),
+        apiKeyValue: apiKey,
+        start,
+        end,
+      });
+    } catch {
+      continue;
+    }
+  }
+  
+  return results;
+}
+
+/** Auth action link detection result (secrets NOT exposed). */
+export type AuthActionLinkDetectionResult = {
+  detected: false;
+} | {
+  detected: true;
+  mode: FirebaseAuthMode;
+  /** Number of auth action links found. */
+  count: number;
+};
+
+/**
+ * Detect if a value contains Firebase auth action links.
+ * 
+ * SECURITY: Result never contains oobCode or apiKey values.
+ */
+export function detectAuthActionLink(value: string): AuthActionLinkDetectionResult {
+  const links = parseFirebaseAuthActionLinks(value);
+  if (links.length === 0) return { detected: false };
+  return {
+    detected: true,
+    mode: links[0].mode,
+    count: links.length,
+  };
+}
+
+/**
+ * Check if a google_api_key match is protected by being inside a valid
+ * Firebase auth action link.
+ * 
+ * Returns true (= skip this match) when ALL of:
+ * 1. The AIza key appears as the `apiKey` query parameter of a valid auth link
+ * 2. The link has mode = resetPassword | verifyEmail | signIn | recoverEmail
+ * 3. The link has an oobCode parameter
+ * 4. The AIza key does NOT appear anywhere else in the text
+ * 
+ * Uses URL parsing (not regex) for the final check.
+ * 
+ * NOTE: The google_api_key pattern matches 39 chars (AIza + 35), but actual
+ * Firebase API keys may be longer. We check if the matched key starts the
+ * apiKey parameter value (which covers all cases).
+ */
+export function isGoogleApiKeyProtectedByAuthLink(
+  value: string,
+  matchedKey: string,
+  authLinks: FirebaseAuthActionLink[]
+): boolean {
+  if (authLinks.length === 0) return false;
+  
+  const linksWithThisKey = authLinks.filter(
+    (link) => link.apiKeyValue !== null && link.apiKeyValue.startsWith(matchedKey)
+  );
+  
+  if (linksWithThisKey.length === 0) return false;
+  
+  const keyMatches = [...value.matchAll(new RegExp(escapeRegExp(matchedKey), "g"))];
+  
+  for (const keyMatch of keyMatches) {
+    const keyStart = keyMatch.index ?? 0;
+    const insideAnyLink = linksWithThisKey.some(
+      (link) => keyStart >= link.start && keyStart < link.end
+    );
+    if (!insideAnyLink) return false;
+  }
+  
+  return true;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

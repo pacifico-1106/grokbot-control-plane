@@ -1236,3 +1236,43 @@ export function isCredentialAutoRenewOrgAllowlistRequired(): boolean {
 export function isCredentialAutoRenewGen1HttpEnabled(): boolean {
   return parseFlag(process.env.CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED);
 }
+
+/**
+ * SECRET_AUTH_ACTION_LINK_ENABLED (default OFF): treat Firebase auth action
+ * links (password reset, email verify, sign-in, email recovery) as a distinct
+ * secret type (auth_action_link) instead of google_api_key.
+ *
+ * When ON (and org is in _ORG_IDS or list is empty):
+ * - AIza keys that appear ONLY inside a Firebase auth action URL (mode is
+ *   resetPassword / verifyEmail / signIn / recoverEmail AND oobCode is present)
+ *   are NOT detected as google_api_key.
+ * - Instead, the oobCode-bearing URL is detected as auth_action_link.
+ * - auth_action_link to a single internal recipient (resolveAudience internal,
+ *   one To, no CC/BCC, no other secrets) → needs_approval with masked oobCode/apiKey.
+ * - External / multi-recipient / channel / unknown audience → blocked.
+ * - oobCode and apiKey values NEVER appear in audit logs, error messages, or
+ *   diagnostic output.
+ *
+ * When OFF (default):
+ * - Firebase auth links are blocked as google_api_key (existing behavior).
+ * - No auth_action_link detection.
+ */
+export function isSecretAuthActionLinkEnabled(): boolean {
+  return parseFlag(process.env.SECRET_AUTH_ACTION_LINK_ENABLED);
+}
+
+const SECRET_AUTH_ACTION_LINK_ORG_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function secretAuthActionLinkOrgIds(): string[] {
+  return (process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter((id) => SECRET_AUTH_ACTION_LINK_ORG_UUID_RE.test(id));
+}
+
+export function isSecretAuthActionLinkEnabledForOrg(orgId: string | null | undefined): boolean {
+  if (!isSecretAuthActionLinkEnabled()) return false;
+  if (!orgId) return false;
+  const list = secretAuthActionLinkOrgIds();
+  return list.length === 0 || list.includes(orgId.trim().toLowerCase());
+}
