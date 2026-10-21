@@ -4,6 +4,7 @@
  * must never silently re-point an existing active binding to another member.
  */
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { getRuntimeMembers } from "@/lib/demo-data";
 import type { OrgMember } from "@/lib/types";
 
 mock.module("@/lib/mode", () => ({
@@ -23,7 +24,10 @@ const member = (id: string, orgId = ORG, status: OrgMember["status"] = "active")
 });
 
 mock.module("@/lib/demo-data", () => ({
-  getRuntimeMemberById: (id: string) => members.get(id) ?? null,
+  // Keep real demo members so this file does not impersonate owner when
+  // another test looks up mem_3 (resolveDemoActor falls back to owner).
+  getRuntimeMemberById: (id: string) =>
+    members.get(id) ?? getRuntimeMembers().find((m) => m.id === id) ?? null,
 }));
 
 const { upsertProofVerifiedVoterBinding, getVoterBinding, revokeVoterBinding, resetDemoVoterBindings } =
