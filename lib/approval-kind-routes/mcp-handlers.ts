@@ -323,8 +323,6 @@ export interface DeputyActivateResult {
   code?: string;
   message?: string;
   approvalId?: string;
-  statusToken?: string;
-  pollUrl?: string;
 }
 
 /**
@@ -564,8 +562,6 @@ export async function handleDeputyActivate(
   return {
     ok: true,
     approvalId: result.approval.id,
-    statusToken: result.statusToken,
-    pollUrl: result.pollUrl,
     message: "決裁代理委任を申請しました（人承認が必要です）",
   };
 }

@@ -455,7 +455,6 @@ export async function demoCreateApproval(
       tool: row.tool,
       jobId: row.jobId,
       risk: row.risk,
-      pollPath: row.pollPath,
       durable: true,
     },
   });

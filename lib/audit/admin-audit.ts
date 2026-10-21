@@ -25,8 +25,9 @@ export type AdminAgentAuditActor = {
 export type AdminAuditActor = HumanAdminAuditActor | AdminAgentAuditActor;
 
 const SECRET_KEY =
-  /^(oneTimeSecret|rawSecret|secret|token|password|bearer|authorization|credential|secretHash|credentialFingerprint)$/i;
+  /^(oneTimeSecret|rawSecret|secret|token|password|bearer|authorization|credential|secretHash|credentialFingerprint|pollUrl|pollPath|poll_path|statusToken|status_token)$/i;
 const SECRET_VALUE = /\b(gb_adm_|gb_emp_|sp_at_)[a-zA-Z0-9]{8,}/;
+const POLL_URL_RE = /\/api\/approvals\/status\?[^\s"'<>]*token=/i;
 const LONG_HEX = /[0-9a-fA-F]{32,}/;
 const HASH_KEY = /(hash|fingerprint)/i;
 const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/;
@@ -183,7 +184,7 @@ function rejectSecretsInValue(
   if (HASH_KEY.test(key) && value.length > 12) {
     throw new Error("admin_audit_full_hash_forbidden");
   }
-  if (SECRET_VALUE.test(value)) {
+  if (SECRET_VALUE.test(value) || POLL_URL_RE.test(value)) {
     throw new Error("admin_audit_secret_forbidden");
   }
   if (LONG_HEX.test(value)) {

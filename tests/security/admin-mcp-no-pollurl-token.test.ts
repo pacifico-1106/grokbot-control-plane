@@ -115,7 +115,14 @@ describe("admin MCP never returns token-bearing poll URLs", () => {
         tool: "mailPolicy.patch",
         args: { rules: [{ id: "mpr_test", audience: "external", sendMode: "draft_only" }] },
       },
-      { tool: "ingressHandoff.patch", args: { rules: [] } },
+      {
+        tool: "ingressHandoff.patch",
+        args: {
+          rules: [
+            { applyTo: "all", body: "full", attachment: "meta", sealith: "off" },
+          ],
+        },
+      },
     ];
     for (const { tool, args } of cases) {
       const result = await callAdminMcpTool(tool, args, cred);

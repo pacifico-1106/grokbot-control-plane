@@ -154,6 +154,28 @@ describe("admin audit identity helper", () => {
 
     expect(() =>
       assertAdminAuditIdentity({
+        action: "admin.policy",
+        actorEmail: "owner@example.com",
+        metadata: {
+          actorKind: "human",
+          pollPath: "/api/approvals/status?id=apr&token=st_secret",
+        },
+      })
+    ).toThrow(/secret/i);
+
+    expect(() =>
+      assertAdminAuditIdentity({
+        action: "admin.policy",
+        actorEmail: "owner@example.com",
+        metadata: {
+          actorKind: "human",
+          note: "poll http://localhost/api/approvals/status?id=apr&token=st_secret",
+        },
+      })
+    ).toThrow(/secret/i);
+
+    expect(() =>
+      assertAdminAuditIdentity({
         action: "admin.link",
         actorEmail: "owner@example.com",
         summary: `rotated ${"c".repeat(64)}`,

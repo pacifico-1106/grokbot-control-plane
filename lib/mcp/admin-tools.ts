@@ -59,7 +59,6 @@ import { SLACK_APPROVER_SET_TOOL, handleSlackApproverSet } from "@/lib/admin-mcp
 import { SLACK_AUTHORIZE_LINK_TOOL, handleSlackAuthorizeLinkIssue } from "@/lib/admin-mcp/slack-authorize-link";
 import { fulfillApprovedAdmin, parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { auditActionForAdminTool } from "@/lib/admin-mcp/audit-class";
-import { buildPollUrl } from "@/lib/approvals/tokens";
 import { handleAllowedAccountsTool, isAllowedAccountsTool } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { POSTING_IDENTITY_SET_TOOL, handlePostingIdentityTool } from "@/lib/admin-mcp/posting-identity-tool";
 import { CREDENTIAL_REISSUE_REASONS, CREDENTIAL_REISSUE_TOOL, handleCredentialReissueTool } from "@/lib/employees/credential-reissue";
@@ -1693,9 +1692,6 @@ async function handleAdminApprovalReinvoke(
         code: "needs_approval",
         needs_approval: true,
         approvalId: approval.id,
-        statusToken: approval.statusToken,
-        pollUrl: buildPollUrl(approval.id, approval.statusToken),
-        pollPath: approval.pollPath,
         pollHint: "continue_polling",
         title: approval.title,
         summary: approval.summary,

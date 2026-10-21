@@ -197,7 +197,6 @@ export type PendingConfigChange = {
       applied: false;
       approvalId: string;
       statusToken: string;
-      pollUrl: string;
       pollHint: "continue_polling";
       title: string;
       summary: string;
@@ -570,7 +569,6 @@ export async function createConfigChangeRequest(
     applied: false,
     approvalId: created.approval.id,
     statusToken: created.statusToken,
-    pollUrl: created.pollUrl,
     pollHint: "continue_polling",
     title: created.approval.title,
     summary,
