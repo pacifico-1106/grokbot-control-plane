@@ -1236,3 +1236,44 @@ export function isCredentialAutoRenewOrgAllowlistRequired(): boolean {
 export function isCredentialAutoRenewGen1HttpEnabled(): boolean {
   return parseFlag(process.env.CREDENTIAL_AUTO_RENEW_GEN1_HTTP_ENABLED);
 }
+
+/**
+ * CONFIG_CHANNEL_CLASSIFICATION_SURFACE_GUARD_ENABLED (default OFF).
+ *
+ * config.change_request の channel_classification で surface が slack 以外の
+ * 場合に、適切な宛先に読み替えるか拒否するガード。
+ *
+ * When ON:
+ * - surface=mail の channel_classification → parties.upsert (mail_address) に
+ *   読み替え。self-approval は禁止（申請した本人は自分で承認できない）。
+ * - surface=phone/line/web/telegram → 申請時点で拒否（fail-closed）。
+ *   どの parties の項目に当たるか曖昧なため DB には書かない。
+ *   エラーで parties.upsert か internalAudienceRule.patch を案内。
+ * - surface=slack → 従来どおり org_channels へ。
+ *
+ * When OFF (default):
+ * - 従来どおりすべての surface を org_channels に書き込む
+ *   （resolveAudience が参照しないため効かないが、挙動は変えない）。
+ *
+ * _ORG_IDS: comma-separated org ids。空 / unset → フラグ ON のとき全 org に適用。
+ * 非空 → その org のみ適用。
+ */
+export function isConfigChannelClassificationSurfaceGuardEnabled(): boolean {
+  return parseFlag(process.env.CONFIG_CHANNEL_CLASSIFICATION_SURFACE_GUARD_ENABLED);
+}
+
+export function configChannelClassificationSurfaceGuardOrgIds(): string[] {
+  return (process.env.CONFIG_CHANNEL_CLASSIFICATION_SURFACE_GUARD_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isConfigChannelClassificationSurfaceGuardEnabledForOrg(
+  orgId: string | null | undefined
+): boolean {
+  if (!isConfigChannelClassificationSurfaceGuardEnabled()) return false;
+  if (!orgId) return false;
+  const list = configChannelClassificationSurfaceGuardOrgIds();
+  return list.length === 0 || list.includes(orgId);
+}
