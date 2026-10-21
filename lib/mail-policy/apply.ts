@@ -17,8 +17,10 @@
  *   first-rule outcome is kept only when it is stricter (draft / reject).
  *   MAIL_POLICY_INTERNAL_NOMATCH_APPROVAL_ENABLED (default OFF, org-scoped):
  *   when audience=internal, no rule matched, and the first rule is
- *   audience=external, skip that first-rule borrow and return needs_approval
- *   like an empty rule list. External outcomes are never loosened.
+ *   audience=external, skip that first-rule draft borrow and return
+ *   needs_approval like an empty rule list. A first-rule reject
+ *   (attachment / CC / D1 / etc.) is kept — stricter only. External
+ *   outcomes are never loosened.
  * - rule.requireHumanFinalSend forces approval on auto.
  *
  * Follow-up (2026-10-03, after #227) — stricter-only:
@@ -446,13 +448,18 @@ function evaluateForRecipient(
     return emptyRulesDecision(audience);
   }
 
-  // Flagged: do not borrow an unmatched first external rule for internal mail.
+  // Flagged: do not borrow an unmatched first external rule's draft for
+  // internal mail. Rejects from that first rule stay reject (stricter only).
   if (
     !matched &&
     audience === "internal" &&
     rule.audience === "external" &&
     isMailPolicyInternalNomatchApprovalEnabledForOrg(input.orgId)
   ) {
+    const borrowed = evaluateRule(policy, rule, audience, domain, input);
+    if (borrowed.rejected) {
+      return { ...borrowed, auditLabels: [...borrowed.auditLabels, "rule:no_match"] };
+    }
     return emptyRulesDecision("internal");
   }
 
