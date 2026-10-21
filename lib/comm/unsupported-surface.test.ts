@@ -5,9 +5,12 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createCommAccount, resetDemoCommAccounts } from "@/lib/comm/accounts";
+import { issueConversationToken } from "@/lib/comm/conversation-token";
 import { DEMO_ORG } from "@/lib/demo-data";
 import { runGatewayInvoke } from "@/lib/gateway/invoke";
 import { upsertConversationAdapter } from "@/lib/data/conversation-adapters";
+import { listApprovals } from "@/lib/data/approvals";
 import { upsertOrgChannel } from "@/lib/data/directory";
 import type { GatewayInvokeRequest } from "@/lib/types";
 
@@ -48,10 +51,14 @@ const FLAGS = [
   "DELIVERY_UNSUPPORTED_SURFACE_ORG_IDS",
   "COMM_ACCOUNTS_ENABLED",
   "LINE_CONVERSATION_ENABLED",
+  "COMM_CONVERSATION_TOKEN_SECRET",
+  "NOTIFICATION_CONFIG_ENCRYPTION_KEY",
+  "NEXT_PUBLIC_SUPABASE_URL",
 ] as const;
 const saved = Object.fromEntries(FLAGS.map((k) => [k, process.env[k]]));
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  resetDemoCommAccounts();
   for (const k of FLAGS) {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k];
@@ -203,5 +210,116 @@ describe("C extract: invoke reads the common verdict when the flag is ON", () =>
     expect(invokeSrc).toContain("unsupportedSurfaceDeliveryVerdict");
     expect(invokeSrc).toContain("isDeliveryUnsupportedSurfaceEnabled");
     expect(invokeSrc).toContain("declaredConversationSurface");
+    expect(invokeSrc).toContain("verifiedLineConversationException");
+  });
+});
+
+describe("L1: LINE exception requires a verified 札 (HMAC + org×employee×account)", () => {
+  const ORG = "ec000000-0000-4000-8000-000000000001";
+  const EMP = "ec100000-0000-4000-8000-000000000001";
+  const OTHER_EMP = "ec100000-0000-4000-8000-000000000002";
+  const USER = `U${"a".repeat(32)}`;
+  const GARBAGE = `spc1.${"A".repeat(40)}.${"B".repeat(43)}`;
+
+  test("garbage / forged / wrong-employee token is not a LINE exception", async () => {
+    const { verifiedLineConversationException } = await uns();
+    process.env.COMM_ACCOUNTS_ENABLED = "true";
+    process.env.LINE_CONVERSATION_ENABLED = "true";
+    process.env.COMM_CONVERSATION_TOKEN_SECRET = "t".repeat(48);
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    resetDemoCommAccounts();
+    const created = await createCommAccount({
+      orgId: ORG,
+      employeeId: EMP,
+      surface: "line",
+      externalAccountId: `U${"1".repeat(32)}`,
+      createdByMemberId: "m1",
+    });
+    if (!created.ok) throw new Error(created.reason);
+    const body = { conversation: { surface: "line", token: GARBAGE } };
+    expect(await verifiedLineConversationException({ body, orgId: ORG, employeeId: EMP })).toBe(false);
+
+    const issued = issueConversationToken({
+      orgId: ORG,
+      employeeId: EMP,
+      accountId: created.account.id,
+      surface: "line",
+      conversationType: "dm",
+      conversationId: USER,
+      counterpartyId: USER,
+    });
+    if (!issued.ok) throw new Error(issued.reason);
+    expect(
+      await verifiedLineConversationException({
+        body: { conversation: { surface: "line", token: issued.token } },
+        orgId: ORG,
+        employeeId: OTHER_EMP,
+      })
+    ).toBe(false);
+    expect(
+      await verifiedLineConversationException({
+        body: { conversation: { surface: "line", token: issued.token } },
+        orgId: ORG,
+        employeeId: EMP,
+      })
+    ).toBe(true);
+  });
+
+  test("HMAC-valid token whose account is not this employee's is refused", async () => {
+    const { verifiedLineConversationException } = await uns();
+    process.env.COMM_ACCOUNTS_ENABLED = "true";
+    process.env.LINE_CONVERSATION_ENABLED = "true";
+    process.env.COMM_CONVERSATION_TOKEN_SECRET = "t".repeat(48);
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    resetDemoCommAccounts();
+    const mine = await createCommAccount({
+      orgId: ORG,
+      employeeId: EMP,
+      surface: "line",
+      externalAccountId: `U${"1".repeat(32)}`,
+      createdByMemberId: "m1",
+    });
+    const other = await createCommAccount({
+      orgId: ORG,
+      employeeId: OTHER_EMP,
+      surface: "line",
+      externalAccountId: `U${"2".repeat(32)}`,
+      createdByMemberId: "m1",
+    });
+    if (!mine.ok || !other.ok) throw new Error("account setup");
+    const issued = issueConversationToken({
+      orgId: ORG,
+      employeeId: EMP,
+      accountId: other.account.id,
+      surface: "line",
+      conversationType: "dm",
+      conversationId: USER,
+      counterpartyId: USER,
+    });
+    if (!issued.ok) throw new Error(issued.reason);
+    expect(
+      await verifiedLineConversationException({
+        body: { conversation: { surface: "line", token: issued.token } },
+        orgId: ORG,
+        employeeId: EMP,
+      })
+    ).toBe(false);
+  });
+
+  test("flag ON + garbage token: always_human / needs_approval must not file an unsendable card", async () => {
+    process.env.DELIVERY_UNSUPPORTED_SURFACE_ENABLED = "true";
+    process.env.COMM_ACCOUNTS_ENABLED = "true";
+    process.env.LINE_CONVERSATION_ENABLED = "true";
+    recordProviders();
+    const body = req("comm.send", { surface: "line", lineId: `U${"b".repeat(32)}`, token: GARBAGE });
+    const res = await invoke(body);
+    expect(res.httpStatus).toBe(409);
+    expect(res.body.code).toBe("delivery_unsupported_surface");
+    expect(res.body.sent).toBe(false);
+    expect(res.body.needs_approval).not.toBe(true);
+    expect(res.body.approvalId).toBeUndefined();
+    expect((await listApprovals(DEMO_ORG.id)).filter((a) => a.jobId === body.jobId)).toHaveLength(0);
+    expect(slackPosts()).toHaveLength(0);
+    expect(linePosts()).toHaveLength(0);
   });
 });
