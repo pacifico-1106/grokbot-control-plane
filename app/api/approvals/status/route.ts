@@ -1,5 +1,7 @@
 import { THREAD_MOVED_ON_CLOSE_REASON, closedWithoutSendInfo } from "@/lib/approvals/closed-without-send";
 import { getApprovalStatusByToken, runtimeModeLabel } from "@/lib/data";
+import { isApprovalStatusPublicMinimalEnabledForOrg } from "@/lib/feature-flags";
+import { publicMinimalStatusPayload } from "@/lib/approvals/status-authz";
 import { getApprovalWorkflowProgress } from "@/lib/approval-workflow";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
@@ -15,6 +17,8 @@ export const runtime = "nodejs";
 /**
  * Signed status poll — primary return pipe until Partner webhook exists.
  * Public-ish: requires id + statusToken (not org session).
+ * When APPROVAL_STATUS_PUBLIC_MINIMAL_ENABLED is ON for the ticket org,
+ * the token-only payload is status/pollHint only (no title/summary/PII).
  *
  * F8 extension: includes workflow progress when workflow applies.
  */
@@ -164,6 +168,10 @@ export async function GET(req: Request) {
         quorumMet: s.quorumMet,
       })),
     };
+  }
+
+  if (isApprovalStatusPublicMinimalEnabledForOrg(approval.orgId)) {
+    return jsonUtf8(publicMinimalStatusPayload(response));
   }
 
   return jsonUtf8(response);
