@@ -29,10 +29,21 @@ export const SECRET_DETECTION_NEXT_STEP_JA =
 /** A non-blocking "looks like a key but has no context" hit. No value. */
 export type SecretFinding = { pattern: string; fieldPath: string; length: number };
 
+/** Detected auth action link info (secrets NOT exposed). */
+export type DetectedAuthActionLink = {
+  mode: 'resetPassword' | 'verifyEmail' | 'signIn' | 'recoverEmail';
+  /** Whether the link contains an oobCode parameter. */
+  hasOobCode: true;
+  /** Whether the link contains an apiKey parameter. */
+  hasApiKey: boolean;
+};
+
 export type SecretDetectionResult = {
   ok: true;
   /** Present only when non-empty. Never carries the value. */
   suspected?: SecretFinding[];
+  /** Auth action links detected (FLAG ON only). oobCode/apiKey values NOT included. */
+  authActionLinks?: DetectedAuthActionLink[];
 } | {
   ok: false;
   code: 'secret_detected_in_payload';
@@ -643,12 +654,29 @@ export function detectSecretInPayload(payload: unknown): SecretDetectionResult {
   const strings = extractAllStrings(payload);
   const idInPayload = strings.some(({ value }) => hasAwsAccessKeyId(value));
   const suspected: SecretFinding[] = [];
+  const authActionLinks: DetectedAuthActionLink[] = [];
+  
   for (const { path, value } of strings) {
     const result = detectSecretInString(value, { hasAwsAccessKeyId: idInPayload, fieldPath: path });
     if (!result.ok) return result;
     if (result.suspected) suspected.push(...result.suspected);
+    
+    if (isSecretAuthActionLinkEnabled()) {
+      const links = parseFirebaseAuthActionLinks(value);
+      for (const link of links) {
+        authActionLinks.push({
+          mode: link.mode,
+          hasOobCode: true,
+          hasApiKey: link.hasApiKey,
+        });
+      }
+    }
   }
-  return suspected.length > 0 ? { ok: true, suspected } : { ok: true };
+  
+  const result: SecretDetectionResult = { ok: true };
+  if (suspected.length > 0) result.suspected = suspected;
+  if (authActionLinks.length > 0) result.authActionLinks = authActionLinks;
+  return result;
 }
 
 export type AuditSafePayload = {

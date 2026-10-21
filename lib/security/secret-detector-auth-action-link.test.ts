@@ -323,6 +323,55 @@ describe("oobCode/apiKey never in audit/log/error", () => {
   });
 });
 
+describe("auth_action_link in payload result", () => {
+  beforeEach(() => {
+    process.env.SECRET_AUTH_ACTION_LINK_ENABLED = "true";
+    delete process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+  });
+
+  test("detectSecretInPayload returns authActionLinks when present", async () => {
+    const { detectSecretInPayload } = await import("./secret-detector");
+    const payload = {
+      args: {
+        body: `リンク: https://app.firebaseapp.com/__/auth/action?mode=resetPassword&oobCode=code&apiKey=${DUMMY_API_KEY}`,
+      },
+    };
+    const result = detectSecretInPayload(payload);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.authActionLinks).toBeDefined();
+      expect(result.authActionLinks?.length).toBe(1);
+      expect(result.authActionLinks?.[0].mode).toBe("resetPassword");
+      expect(result.authActionLinks?.[0].hasOobCode).toBe(true);
+    }
+  });
+
+  test("authActionLinks never contains oobCode or apiKey values", async () => {
+    const { detectSecretInPayload } = await import("./secret-detector");
+    const payload = {
+      args: {
+        body: `https://app.firebaseapp.com/__/auth/action?mode=resetPassword&oobCode=secretCode&apiKey=${DUMMY_API_KEY}`,
+      },
+    };
+    const result = detectSecretInPayload(payload);
+    const resultJson = JSON.stringify(result);
+    expect(resultJson).not.toContain("secretCode");
+    expect(resultJson).not.toContain(DUMMY_API_KEY);
+  });
+
+  test("FLAG OFF: detectSecretInPayload does not return authActionLinks", async () => {
+    delete process.env.SECRET_AUTH_ACTION_LINK_ENABLED;
+    const { detectSecretInPayload } = await import("./secret-detector");
+    const payload = {
+      args: {
+        body: `https://app.firebaseapp.com/__/auth/action?mode=resetPassword&oobCode=code&apiKey=${DUMMY_API_KEY}`,
+      },
+    };
+    const result = detectSecretInPayload(payload);
+    expect(result.ok).toBe(false);
+  });
+});
+
 describe("edge cases", () => {
   beforeEach(() => {
     process.env.SECRET_AUTH_ACTION_LINK_ENABLED = "true";
