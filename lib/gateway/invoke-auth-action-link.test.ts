@@ -646,6 +646,183 @@ describe("M2: 申請者の自己承認禁止 (AUTHORITY ON)", () => {
 });
 
 // ============================================================================
+// M2a: Human requester self-approval prevention
+// When gateway request has speakerId (Slack user) with active voter binding,
+// resolve to requesterMemberId for self-approval prevention
+// ============================================================================
+describe("M2a: 人間依頼者の自己承認防止 (speakerId → requesterMemberId)", () => {
+  beforeEach(() => {
+    process.env.SECRET_AUTH_ACTION_LINK_ENABLED = "true";
+    delete process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+  });
+
+  async function bindSlackVoter(slackUserId: string, memberId: string) {
+    const { createPendingVoterBinding, verifyVoterBinding, resetDemoVoterBindings } = await import("@/lib/approval-workflow/voter-binding");
+    resetDemoVoterBindings();
+    
+    // In demo mode, checkChannelBelongsToOrg returns ok:true for any channelKey
+    const input = { orgId: DEMO_ORG.id, provider: "slack" as const, channelKey: "C_M2A_FIXTURE", externalUserId: slackUserId, memberId };
+    const created = await createPendingVoterBinding(input);
+    if (!created.ok) throw new Error(created.reason);
+    const verified = await verifyVoterBinding({ ...input, verificationCode: created.verificationCode });
+    if (!verified.ok) throw new Error(verified.reason);
+  }
+
+  test("M2a: auth-link approval from gateway request with speakerId sets requesterMemberId via voter binding", async () => {
+    // Set up: Create and verify voter binding for the speaker Slack user ID
+    // Use valid Slack user ID format: /^[UW][A-Z0-9]{2,30}$/
+    await bindSlackVoter("U0M2ASPKR01", "mem_1"); // mem_1 is an owner in demo data
+
+    // Send mail with auth link AND speakerId at top-level of body
+    // For mail.send, speakerId identifies the human requester without affecting egress
+    const result = await withNeedsApprovalMailPolicy(async () => {
+      return runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId: `job_m2a_speaker_${Date.now()}`,
+          speakerId: "U0M2ASPKR01", // Top-level speakerId for requester resolution
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: makeAuthLinkBody("user@tokyo307inc.com"),
+          },
+        },
+      });
+    });
+
+    expect(result.httpStatus).toBe(402);
+    const approval = await getApprovalById(result.body.approvalId as string, DEMO_ORG.id);
+    expect(approval).toBeTruthy();
+    // M2a: requesterMemberId should be resolved from speakerId via voter binding
+    expect(approval!.metadata.requesterMemberId).toBe("mem_1");
+  });
+
+  test("M2a: owner who is the requester cannot approve their own auth-link ticket (when multiple owners)", async () => {
+    // Set up: Create and verify voter binding for the owner
+    // Use valid Slack user ID format
+    await bindSlackVoter("U0M2AOWNR01", "mem_1"); // mem_1 is an owner in demo data
+    
+    // Add a second owner to trigger self-approval denial
+    // (With only 1 owner, self-approval is allowed by design)
+    const { upsertRuntimeMember, resetRuntimeMembers } = await import("@/lib/demo-data");
+    const originalMembers = [...(await import("@/lib/demo-data")).getRuntimeMembers()];
+    upsertRuntimeMember({
+      id: "mem_m2a_owner2",
+      orgId: DEMO_ORG.id,
+      email: "owner2@tokyo307inc.com",
+      displayName: "Second Owner",
+      role: "owner",
+      status: "active",
+      capabilities: ["view_dashboard", "manage_team"],
+    }, { audit: false });
+
+    try {
+      // Create auth-link approval with this owner as the requester
+      const result = await withNeedsApprovalMailPolicy(async () => {
+        return runGatewayInvoke({
+          employeeId: "emp_sales",
+          credentialId: "cred_sales",
+          body: {
+            tool: "mail.send",
+            purpose: "sales.outreach",
+            jobId: `job_m2a_self_${Date.now()}`,
+            speakerId: "U0M2AOWNR01", // Top-level speakerId
+            args: {
+              to: "user@tokyo307inc.com",
+              from: "noreply@oneplace.tokyo307inc.com",
+              subject: "パスワード再設定",
+              body: makeAuthLinkBody("user@tokyo307inc.com"),
+            },
+          },
+        });
+      });
+
+      expect(result.httpStatus).toBe(402);
+      const approvalId = result.body.approvalId as string;
+
+      // The owner (mem_1) who is also the requester should NOT be able to approve
+      const resolved = await resolveApproval(
+        approvalId,
+        "approved",
+        "owner@tokyo307inc.com",
+        DEMO_ORG.id,
+        { memberId: "mem_1" }
+      );
+      // M2a: Self-approval should be denied when there are multiple owners
+      expect(resolved).toBeNull();
+
+      const approval = await getApprovalById(approvalId, DEMO_ORG.id);
+      expect(approval?.status).toBe("pending");
+      
+      // But the second owner CAN approve
+      const resolved2 = await resolveApproval(
+        approvalId,
+        "approved",
+        "owner2@tokyo307inc.com",
+        DEMO_ORG.id,
+        { memberId: "mem_m2a_owner2" }
+      );
+      expect(resolved2?.status).toBe("approved");
+    } finally {
+      // Restore original members
+      resetRuntimeMembers();
+      for (const m of originalMembers) {
+        upsertRuntimeMember(m, { audit: false });
+      }
+    }
+  });
+
+  test("M2a: without speakerId, no requesterMemberId is set (AI employee request)", async () => {
+    // No conversation context → no speakerId → no requesterMemberId
+    const result = await withNeedsApprovalMailPolicy(() =>
+      sendMailWithAuthLink({ to: "user@tokyo307inc.com", jobSuffix: "m2a_no_speaker" })
+    );
+    expect(result.httpStatus).toBe(402);
+    const approval = await getApprovalById(result.body.approvalId as string, DEMO_ORG.id);
+    expect(approval).toBeTruthy();
+    // M2a: No speakerId means no requesterMemberId
+    expect(approval!.metadata.requesterMemberId).toBeUndefined();
+  });
+
+  test("M2a: unresolved speakerId (no voter binding) does not set requesterMemberId", async () => {
+    const { resetDemoVoterBindings } = await import("@/lib/approval-workflow/voter-binding");
+    resetDemoVoterBindings();
+    // No voter binding created for U0M2AUNKNWN (valid Slack format but no binding)
+
+    const result = await withNeedsApprovalMailPolicy(async () => {
+      return runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId: `job_m2a_unknown_${Date.now()}`,
+          speakerId: "U0M2AUNKNWN", // Valid Slack format but no voter binding
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: makeAuthLinkBody("user@tokyo307inc.com"),
+          },
+        },
+      });
+    });
+
+    expect(result.httpStatus).toBe(402);
+    const approval = await getApprovalById(result.body.approvalId as string, DEMO_ORG.id);
+    expect(approval).toBeTruthy();
+    // M2a: Unresolved speakerId should NOT set requesterMemberId
+    // Document: requesterIdentity.identified will be false with reason
+    expect(approval!.metadata.requesterMemberId).toBeUndefined();
+    expect(approval!.metadata.requesterIdentity?.identified).toBe(false);
+  });
+});
+
+// ============================================================================
 // M3: fulfill-time recipient re-verification + snapshot hygiene
 // M3: auth-link policy is re-evaluated at fulfill and approvalId re-invoke
 // Conditions: "ForOrg", "internal 1 recipient", "no CC/BCC", "external prohibited"
@@ -875,5 +1052,282 @@ describe("L: createApproval失敗時は失敗を返す", () => {
     expect(result.body.ok).toBe(false);
     expect(result.body.code).toBe("approval_create_failed");
     expect(result.body.needs_approval).not.toBe(true);
+  });
+});
+
+// ============================================================================
+// H1: approvalId re-invoke actually sends mail with atomic claim
+// ============================================================================
+describe("H1: approvalId再実行で実際に送信し、atomic claimで1回のみ", () => {
+  beforeEach(() => {
+    process.env.SECRET_AUTH_ACTION_LINK_ENABLED = "true";
+    delete process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+  });
+
+  afterEach(async () => {
+    resetDemoMailPolicy();
+    clearDemoRule();
+  });
+
+  test("H1: re-invoke with approvalId and original body marks approval as consumed (sent:true)", async () => {
+    const jobId = `job_h1_send_${Date.now()}`;
+    const originalBody = makeAuthLinkBody("user@tokyo307inc.com");
+
+    // Create and approve the auth-link request
+    const createResult = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId,
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: originalBody,
+          },
+        },
+      })
+    );
+    expect(createResult.httpStatus).toBe(402);
+    const approvalId = createResult.body.approvalId as string;
+
+    // Approve the request
+    const approved = await resolveApproval(
+      approvalId,
+      "approved",
+      "owner@tokyo307inc.com",
+      DEMO_ORG.id,
+      { memberId: "mem_1" }
+    );
+    expect(approved?.status).toBe("approved");
+
+    // Re-invoke with approvalId and original body
+    const sendResult = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId,
+          approvalId,
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: originalBody,
+          },
+        },
+      })
+    );
+    // H1: Should return success and mark as sent
+    expect(sendResult.httpStatus).toBe(200);
+    expect(sendResult.body.ok).toBe(true);
+    expect(sendResult.body.result?.sent).toBe(true);
+
+    // Verify approval is now consumed (check metadata has fulfillment)
+    const consumedApproval = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(consumedApproval?.metadata?.authLinkFulfillment?.consumed).toBe(true);
+  });
+
+  test("H1: second re-invoke with same approvalId is rejected (already consumed)", async () => {
+    const jobId = `job_h1_double_${Date.now()}`;
+    const originalBody = makeAuthLinkBody("user@tokyo307inc.com");
+
+    // Create, approve, and first send
+    const createResult = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId,
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: originalBody,
+          },
+        },
+      })
+    );
+    const approvalId = createResult.body.approvalId as string;
+
+    await resolveApproval(approvalId, "approved", "owner@tokyo307inc.com", DEMO_ORG.id, { memberId: "mem_1" });
+
+    // First re-invoke succeeds
+    const firstSend = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId,
+          approvalId,
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: originalBody,
+          },
+        },
+      })
+    );
+    expect(firstSend.httpStatus).toBe(200);
+
+    // Second re-invoke should be rejected
+    const secondSend = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId,
+          approvalId,
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: originalBody,
+          },
+        },
+      })
+    );
+    // H1: Second attempt should fail with "already consumed"
+    expect(secondSend.httpStatus).toBe(409);
+    expect(secondSend.body.ok).toBe(false);
+    expect(secondSend.body.code).toBe("auth_link_already_sent");
+  });
+});
+
+// ============================================================================
+// H2: re-invoke must re-evaluate all 4 auth-link policy conditions
+// ============================================================================
+describe("H2: 再実行時にauth-linkポリシーの全4条件を再判定", () => {
+  beforeEach(() => {
+    process.env.SECRET_AUTH_ACTION_LINK_ENABLED = "true";
+    delete process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+  });
+
+  afterEach(async () => {
+    resetDemoMailPolicy();
+    clearDemoRule();
+  });
+
+  test("H2: re-invoke with empty body fields is rejected (original required)", async () => {
+    const jobId = `job_h2_empty_${Date.now()}`;
+    const originalBody = makeAuthLinkBody("user@tokyo307inc.com");
+
+    // Create and approve
+    const createResult = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId,
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: originalBody,
+          },
+        },
+      })
+    );
+    const approvalId = createResult.body.approvalId as string;
+    await resolveApproval(approvalId, "approved", "owner@tokyo307inc.com", DEMO_ORG.id, { memberId: "mem_1" });
+
+    // Re-invoke with empty body (trying to bypass auth-link check)
+    const emptyBodyResult = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId,
+          approvalId,
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: "", // Empty body - should be rejected
+          },
+        },
+      })
+    );
+    // H2: Should reject because original body is required for auth-link sends
+    expect(emptyBodyResult.httpStatus).toBe(409);
+    expect(emptyBodyResult.body.ok).toBe(false);
+    expect(emptyBodyResult.body.code).toBe("auth_link_original_required");
+  });
+
+  test("H2: re-invoke re-checks ForOrg condition", async () => {
+    const jobId = `job_h2_org_${Date.now()}`;
+    const originalBody = makeAuthLinkBody("user@tokyo307inc.com");
+    // Use a proper UUID that matches DEMO_ORG's id format for testing
+    // Note: SECRET_AUTH_ACTION_LINK_ORG_IDS only accepts UUID format
+    // When the list is empty (no valid UUIDs), all orgs are enabled
+    // So we need to use UUIDs that get filtered OUT to test the restriction
+    const VALID_UUID_FOR_DEMO = "00000000-0000-0000-0000-000000000000";
+    const OTHER_UUID = "11111111-1111-1111-1111-111111111111";
+
+    // Create with empty _ORG_IDS (all orgs enabled - DEMO_ORG.id isn't a UUID so it's filtered out)
+    // This allows the auth-link approval to be created for the demo org
+    delete process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+    const createResult = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId,
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: originalBody,
+          },
+        },
+      })
+    );
+    const approvalId = createResult.body.approvalId as string;
+    await resolveApproval(approvalId, "approved", "owner@tokyo307inc.com", DEMO_ORG.id, { memberId: "mem_1" });
+
+    // Now restrict to OTHER_UUID only - DEMO_ORG is excluded
+    process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS = OTHER_UUID;
+
+    const rerunResult = await withNeedsApprovalMailPolicy(() =>
+      runGatewayInvoke({
+        employeeId: "emp_sales",
+        credentialId: "cred_sales",
+        body: {
+          tool: "mail.send",
+          purpose: "sales.outreach",
+          jobId,
+          approvalId,
+          args: {
+            to: "user@tokyo307inc.com",
+            from: "noreply@oneplace.tokyo307inc.com",
+            subject: "パスワード再設定",
+            body: originalBody,
+          },
+        },
+      })
+    );
+    // H2: Should be blocked because org is no longer in _ORG_IDS
+    // The secret detection runs before priorApproval check and blocks google_api_key
+    expect(rerunResult.httpStatus).toBe(400);
+    expect(rerunResult.body.code).toBe("secret_detected_in_payload");
+    expect(rerunResult.body.pattern).toBe("google_api_key");
   });
 });

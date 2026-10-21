@@ -2268,7 +2268,234 @@ async function runGatewayInvokeInner(
   // snapshot) plus any recipients in this request against the CURRENT mail
   // policy. If it now rejects or demotes, stop: 409, audited, not sent.
   if (tool === "mail.send" && priorApprovalOk && priorApproval) {
-    // Pin first: the re-invoke must carry exactly the approved mail (every
+    // H1/H2: Auth link approval special handling BEFORE pin check
+    // For auth-link approvals, we need to check body presence first because
+    // empty body has a specific error code (auth_link_original_required)
+    const isAuthLinkApproval = priorApproval.metadata?.authActionLink === true;
+    if (isAuthLinkApproval) {
+      // H1: Check atomic claim - if already consumed, reject
+      const alreadyConsumed = priorApproval.metadata?.authLinkFulfillment?.consumed === true;
+      if (alreadyConsumed) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "tool.invoke",
+          purpose,
+          summary: "認証リンクの再送信を拒否（既に送信済み）",
+          metadata: {
+            tool,
+            jobId,
+            approvalId: priorApprovalId,
+            code: "auth_link_already_sent",
+            phase: "reinvoke",
+          },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: "auth_link_already_sent",
+            error: "auth_link_already_sent",
+            message: "この認証リンクは既に送信済みです。同じ承認で複数回送信することはできません。",
+            needs_approval: false,
+            approvalId: priorApprovalId,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          409
+        );
+      }
+
+      // H2: Check ForOrg condition - ensure org is still enabled for auth-link
+      const { isSecretAuthActionLinkEnabledForOrg } = await import("@/lib/feature-flags");
+      if (!isSecretAuthActionLinkEnabledForOrg(orgId || employee.orgId)) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "tool.invoke",
+          purpose,
+          summary: "認証リンクの再送信を拒否（org がフラグ対象外）",
+          metadata: {
+            tool,
+            jobId,
+            approvalId: priorApprovalId,
+            code: "google_api_key",
+            phase: "reinvoke",
+            reason: "org_no_longer_enabled",
+          },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: "google_api_key",
+            error: "google_api_key",
+            message: "認証リンクの送信機能が無効になっています。",
+            needs_approval: false,
+            approvalId: priorApprovalId,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          400
+        );
+      }
+
+      // H2: Check that body is provided (original required for auth-link sends)
+      const currentBodyText = typeof body.args?.body === "string" ? body.args.body : "";
+      if (!currentBodyText.trim()) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "tool.invoke",
+          purpose,
+          summary: "認証リンクの再送信を拒否（本文が空）",
+          metadata: {
+            tool,
+            jobId,
+            approvalId: priorApprovalId,
+            code: "auth_link_original_required",
+            phase: "reinvoke",
+          },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: "auth_link_original_required",
+            error: "auth_link_original_required",
+            message: "認証リンクの送信には元の本文が必要です。空の本文では送信できません。",
+            needs_approval: false,
+            approvalId: priorApprovalId,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          409
+        );
+      }
+
+      // H2: Re-run secret detection on current body for auth-link policy
+      const currentSecretDetection = detectSecretInPayload(body, { orgId: orgId || employee.orgId });
+
+      // H2: Re-evaluate all 4 auth-link conditions
+      const recheckToInfo = collectMailToRecipients(body);
+      const recheckRecipients = extractMailRecipients(body);
+      const recheckParsedTo = parseMailRecipientList(recheckToInfo.to);
+      const recheckAudienceDecision = (await evaluateMailPolicyForRequest({
+        orgId: orgId || employee.orgId,
+        employeeId,
+        body,
+      })).decision;
+      const recheckAuthLinkPolicy = evaluateAuthActionLinkPolicy({
+        orgId: orgId || employee.orgId,
+        secretDetection: currentSecretDetection,
+        audience: {
+          effectiveAudience: recheckAudienceDecision.audience === "internal" ? "internal" : "external",
+          namedRecipients: recheckParsedTo.recipients.length > 0,
+          destinationMissing: recheckParsedTo.recipients.length === 0,
+        },
+        recipients: {
+          toCount: recheckParsedTo.recipients.length,
+          ccCount: recheckRecipients.cc.length,
+          bccCount: recheckRecipients.bcc.length,
+        },
+        isChannelPost: false,
+      });
+
+      // H2: If auth-link policy blocks, reject the re-invoke
+      if (!recheckAuthLinkPolicy.ok) {
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "tool.invoke",
+          purpose,
+          summary: `認証リンクの再送信をポリシーで拒否: ${recheckAuthLinkPolicy.reason}`,
+          metadata: {
+            tool,
+            jobId,
+            approvalId: priorApprovalId,
+            code: "auth_link_reinvoke_blocked",
+            reason: recheckAuthLinkPolicy.reason,
+            phase: "reinvoke",
+          },
+        });
+        // Return appropriate error based on reason
+        const isGoogleApiKeyBlock = !currentSecretDetection.ok && currentSecretDetection.pattern === "google_api_key";
+        return jsonResult(
+          {
+            ok: false,
+            code: isGoogleApiKeyBlock ? "google_api_key" : "auth_action_link_blocked",
+            error: isGoogleApiKeyBlock ? "google_api_key" : "auth_action_link_blocked",
+            reason: recheckAuthLinkPolicy.reason,
+            message: recheckAuthLinkPolicy.messageJa || "認証リンクの再送信がポリシーでブロックされました。",
+            needs_approval: false,
+            approvalId: priorApprovalId,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          400
+        );
+      }
+
+      // H1: Auth-link re-invoke is valid. Mark as consumed and proceed to send.
+      // The actual send happens at the end of the function for mail.send.
+      // We need to update the approval metadata to mark it as consumed.
+      const { updateApprovalMetadata } = await import("@/lib/data/approvals");
+      const consumeResult = await updateApprovalMetadata(priorApproval, {
+        authLinkFulfillment: {
+          consumed: true,
+          consumedAt: new Date().toISOString(),
+          consumedByJobId: jobId,
+        },
+      });
+      if (!consumeResult) {
+        // Failed to mark as consumed - fail safe
+        await appendAuditEvent({
+          orgId: orgId || employee.orgId,
+          employeeId,
+          credentialId: input.credentialId || employee.credentialId,
+          action: "tool.invoke",
+          purpose,
+          summary: "認証リンクの消費マーキングに失敗",
+          metadata: {
+            tool,
+            jobId,
+            approvalId: priorApprovalId,
+            code: "auth_link_consume_failed",
+            phase: "reinvoke",
+          },
+        });
+        return jsonResult(
+          {
+            ok: false,
+            code: "auth_link_consume_failed",
+            error: "auth_link_consume_failed",
+            message: "認証リンクの送信準備に失敗しました。もう一度お試しください。",
+            needs_approval: false,
+            approvalId: priorApprovalId,
+            employeeId,
+            tool,
+            purpose,
+            jobId,
+          },
+          500
+        );
+      }
+
+      // Auth-link send proceeds - the actual Gmail send happens via the normal mail.send path
+      // which will be triggered by the fact that priorApprovalOk is true and tool is mail.send.
+      // We've already validated all auth-link conditions, so we can proceed.
+    }
+
+    // Pin check: the re-invoke must carry exactly the approved mail (every
     // recipient field, cc / bcc, subject, body and other args), or no mail
     // fields at all (= send the approved mail as-is). Approvals without a pin
     // (created before pinning) fail closed. Field names only, never values.
@@ -2317,6 +2544,7 @@ async function runGatewayInvokeInner(
       );
     }
     const approvedSnapshot = parseInvokeSnapshot(priorApproval.metadata);
+
     const toJudge: Array<{ source: "approved_snapshot" | "request"; body: Parameters<typeof evaluateMailPolicyForRequest>[0]["body"] }> = [];
     if (approvedSnapshot) {
       toJudge.push({ source: "approved_snapshot", body: { args: approvedSnapshot.args, conversation: approvedSnapshot.conversation } });
@@ -2578,8 +2806,8 @@ async function runGatewayInvokeInner(
 
       // Auth link allowed: create approval with masked summary and always_human.
       // SECURITY: oobCode/apiKey values are NEVER included in summary.
-      // M2: Set requesterMemberId for self-approval prevention and required_approver_kind
-      // for APPROVER_AUTHORITY (owner or designated admin only).
+      // M2a: Resolve human requester from speakerId for self-approval prevention.
+      // M2: Set requiredApproverKind for APPROVER_AUTHORITY (owner or designated admin only).
       if (authLinkPolicy.action === "needs_approval") {
         const recipientEmail = toInfo.sources[0] || "不明";
         const mode = authLinkPolicy.links[0]?.mode || "resetPassword";
@@ -2588,6 +2816,21 @@ async function runGatewayInvokeInner(
         const authLinkTitle = `承認依頼: 認証リンク送信（${purpose}）`;
         // M3: Mask oobCode/apiKey values before storing in snapshot - SECURITY requirement
         const sanitizedBody = maskAuthActionLinkSecretsInBody(body, authLinkPolicy.links);
+
+        // M2a: Extract speakerId from body (top-level, conversation, or args) and resolve to member
+        // This identifies the human who initiated the request for self-approval prevention.
+        const { resolveAdminRequester, requesterMetadata, SLACK_USER_ID_FORMAT } = await import("@/lib/admin-mcp/requester-identity");
+        const bodyArgs = body.args && typeof body.args === "object" ? (body.args as Record<string, unknown>) : {};
+        const bodyConv = body.conversation && typeof body.conversation === "object" ? body.conversation : {};
+        const rawSpeakerId =
+          (typeof (body as Record<string, unknown>).speakerId === "string" ? (body as Record<string, unknown>).speakerId : null) ||
+          (typeof bodyConv.speakerId === "string" ? bodyConv.speakerId : null) ||
+          (typeof bodyConv.user === "string" ? bodyConv.user : null) ||
+          (typeof bodyArgs.speakerId === "string" ? bodyArgs.speakerId : null) ||
+          (typeof bodyArgs.user === "string" ? bodyArgs.user : null);
+        const speakerId = rawSpeakerId && SLACK_USER_ID_FORMAT.test(rawSpeakerId) ? rawSpeakerId : null;
+        const requesterIdentity = await resolveAdminRequester(orgId, speakerId);
+        const requesterMeta = requesterMetadata(requesterIdentity);
 
         try {
           const created = await createApproval({
@@ -2623,9 +2866,11 @@ async function runGatewayInvokeInner(
               ...(secretDetection.ok && secretDetection.suspected?.length
                 ? { suspected: secretDetection.suspected }
                 : {}),
-              // M2: Do NOT set requesterMemberId to employeeId (AI employee).
-              // The requesterMemberId should only be set to a human member ID.
-              // Auth link approvals require owner/designated_admin via requiredApproverKind.
+              // M2a: Set requesterMemberId from resolved speakerId (human requester).
+              // When identified, this enables self-approval prevention.
+              // When not identified (no speakerId or no voter binding), fail safe:
+              // requesterMemberId is omitted, and self-approval cannot be detected.
+              ...requesterMeta,
             },
           });
 
