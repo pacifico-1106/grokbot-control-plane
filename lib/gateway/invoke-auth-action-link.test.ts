@@ -823,7 +823,7 @@ describe("M2a: 人間依頼者の自己承認防止 (speakerId → requesterMemb
   test("M2a: without speakerId, no requesterMemberId is set (AI employee request)", async () => {
     // Follow-up M4: no authenticated speaker pin → fail-closed.
     clearAuthenticatedSlackSpeakers();
-    const result = await withNeedsApprovalMailPolicy(() => {
+    const result = await withNeedsApprovalMailPolicy(() =>
       runGatewayInvoke({
         employeeId: "emp_sales",
         credentialId: "cred_sales",
