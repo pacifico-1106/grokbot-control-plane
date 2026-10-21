@@ -823,6 +823,115 @@ describe("M2a: 人間依頼者の自己承認防止 (speakerId → requesterMemb
 });
 
 // ============================================================================
+// M2b: Enforce authority check for tickets with requiredApproverKind even when
+// APPROVER_AUTHORITY_ENABLED is OFF
+// ============================================================================
+describe("M2b: kind付きチケットでAUTHORITY OFF時も権限チェック強制", () => {
+  beforeEach(() => {
+    process.env.SECRET_AUTH_ACTION_LINK_ENABLED = "true";
+    delete process.env.SECRET_AUTH_ACTION_LINK_ORG_IDS;
+    // M2b: AUTHORITY flag is OFF, but auth-link tickets should still enforce authority
+    delete process.env.APPROVER_AUTHORITY_ENABLED;
+  });
+
+  test("M2b: designated_admin can approve auth-link ticket (AUTHORITY OFF)", async () => {
+    const { writeDesignatedAdminMemberIds, resetDemoDesignatedAdminsForTests } = await import("@/lib/approver-authority/designated-admins");
+    const { upsertRuntimeMember } = await import("@/lib/demo-data");
+    
+    // Add a designated admin
+    upsertRuntimeMember({
+      id: "mem_m2b_dadmin",
+      orgId: DEMO_ORG.id,
+      email: "dadmin@tokyo307inc.com",
+      displayName: "Designated Admin",
+      role: "admin",
+      status: "active",
+      capabilities: ["view_dashboard", "manage_team"],
+    }, { audit: false });
+    await writeDesignatedAdminMemberIds(DEMO_ORG.id, ["mem_m2b_dadmin"]);
+
+    try {
+      const result = await withNeedsApprovalMailPolicy(() =>
+        sendMailWithAuthLink({ to: "user@tokyo307inc.com", jobSuffix: "m2b_dadmin" })
+      );
+      expect(result.httpStatus).toBe(402);
+      const approvalId = result.body.approvalId as string;
+
+      // M2b: Designated admin can approve auth-link ticket even with AUTHORITY OFF
+      const resolved = await resolveApproval(
+        approvalId,
+        "approved",
+        "dadmin@tokyo307inc.com",
+        DEMO_ORG.id,
+        { memberId: "mem_m2b_dadmin" }
+      );
+      expect(resolved?.status).toBe("approved");
+    } finally {
+      resetDemoDesignatedAdminsForTests();
+    }
+  });
+
+  test("M2b: identity check enforced at voting for auth-link tickets (AUTHORITY OFF)", async () => {
+    const { createPendingVoterBinding, verifyVoterBinding, resetDemoVoterBindings } = await import("@/lib/approval-workflow/voter-binding");
+    resetDemoVoterBindings();
+
+    // Create voter binding for admin (NOT owner, NOT designated admin)
+    const input = { orgId: DEMO_ORG.id, provider: "slack" as const, channelKey: "C_M2B_VOTE", externalUserId: "U0M2BVOTER", memberId: "mem_3" };
+    const created = await createPendingVoterBinding(input);
+    if (!created.ok) throw new Error(created.reason);
+    await verifyVoterBinding({ ...input, verificationCode: created.verificationCode });
+
+    const result = await withNeedsApprovalMailPolicy(() =>
+      sendMailWithAuthLink({ to: "user@tokyo307inc.com", jobSuffix: "m2b_vote" })
+    );
+    expect(result.httpStatus).toBe(402);
+    const approvalId = result.body.approvalId as string;
+
+    // M2b: Regular member cannot approve auth-link ticket (even with AUTHORITY OFF)
+    // because the ticket has requiredApproverKind that must be enforced
+    const resolved = await resolveApproval(
+      approvalId,
+      "approved",
+      "member@tokyo307inc.com",
+      DEMO_ORG.id,
+      { memberId: "mem_3" }
+    );
+    // M2b: Should be rejected - not owner or designated admin
+    expect(resolved).toBeNull();
+
+    const approval = await getApprovalById(approvalId, DEMO_ORG.id);
+    expect(approval?.status).toBe("pending");
+  });
+
+  test("M2b: fulfill enforces authority check for auth-link tickets (AUTHORITY OFF)", async () => {
+    const result = await withNeedsApprovalMailPolicy(() =>
+      sendMailWithAuthLink({ to: "user@tokyo307inc.com", jobSuffix: "m2b_fulfill" })
+    );
+    expect(result.httpStatus).toBe(402);
+    const approvalId = result.body.approvalId as string;
+
+    // Approve with owner
+    const resolved = await resolveApproval(
+      approvalId,
+      "approved",
+      "owner@tokyo307inc.com",
+      DEMO_ORG.id,
+      { memberId: "mem_1" }
+    );
+    expect(resolved?.status).toBe("approved");
+
+    // M2b: The approval should have approverMemberId set for fulfill verification
+    expect(resolved?.approverMemberId).toBe("mem_1");
+    expect(resolved?.requiredApproverKind).toBe("owner_or_designated_admin");
+
+    // The fulfill path (assertApproverAuthorityForExecution) should not throw
+    // because the approverMemberId is properly recorded
+    const { assertApproverAuthorityForExecution } = await import("@/lib/approver-authority/verify");
+    await expect(assertApproverAuthorityForExecution(resolved!)).resolves.toBeUndefined();
+  });
+});
+
+// ============================================================================
 // M3: fulfill-time recipient re-verification + snapshot hygiene
 // M3: auth-link policy is re-evaluated at fulfill and approvalId re-invoke
 // Conditions: "ForOrg", "internal 1 recipient", "no CC/BCC", "external prohibited"

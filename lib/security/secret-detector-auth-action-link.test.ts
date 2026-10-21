@@ -527,6 +527,30 @@ describe("L: api_key_inlineは全てのヒットを確認", () => {
       expect(result.pattern).toBe("api_key_inline");
     }
   });
+
+  test("L1: api_key_inline inside continueUrl is blocked (not the Firebase apiKey)", async () => {
+    const { detectSecretInString } = await import("./secret-detector");
+    const LEAKED_KEY = "LEAKED_API_KEY_IN_CONTINUE_URL_12345";
+    const text = `
+      https://app.firebaseapp.com/__/auth/action?mode=resetPassword&oobCode=x&apiKey=${DUMMY_API_KEY}&continueUrl=https://other.com?api_key=${LEAKED_KEY}
+    `;
+    const result = detectSecretInString(text, { orgId: TEST_ORG });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.pattern).toBe("api_key_inline");
+    }
+  });
+
+  test("L1: only the exact Firebase apiKey value is allowed, not different key in same URL", async () => {
+    const { detectSecretInString } = await import("./secret-detector");
+    // The Firebase apiKey=DUMMY_API_KEY is the ONLY api_key_inline in the URL
+    // and it matches the link's apiKeyValue, so it should pass
+    const text = `
+      https://app.firebaseapp.com/__/auth/action?mode=resetPassword&oobCode=x&apiKey=${DUMMY_API_KEY}
+    `;
+    const result = detectSecretInString(text, { orgId: TEST_ORG });
+    expect(result.ok).toBe(true);
+  });
 });
 
 describe("edge cases", () => {

@@ -201,10 +201,13 @@ export class ApproverAuthorityExecutionError extends Error {
 /**
  * Re-verify the stored approver right before fulfil (called from
  * assertApprovalExecutionAuthority, before the demo early return).
- * Flag OFF or ticket without a required kind → no-op (today's behaviour).
+ * M2b: Enforce for tickets with requiredApproverKind even when global flag is OFF.
+ * Flag OFF AND no required kind → no-op (today's behaviour).
  */
 export async function assertApproverAuthorityForExecution(approval: ApprovalRequest): Promise<void> {
-  if (!isApproverAuthorityEnabled()) return;
+  // M2b: Enforce authority for tickets with requiredApproverKind even when global flag is OFF
+  const hasRequiredKind = Boolean(approval.requiredApproverKind);
+  if (!isApproverAuthorityEnabled() && !hasRequiredKind) return;
   const kind = approval.requiredApproverKind;
   if (kind === null || kind === undefined) {
     // Review 2026-10-09 item 4: a target-tool ticket with no class was filed

@@ -556,10 +556,19 @@ function scanString(value: string, ctx: SecretScanContext, fieldPath: string, fu
       for (const match of value.matchAll(globalPattern)) {
         const matchStart = match.index ?? 0;
         const matchEnd = matchStart + match[0].length;
-        const insideAuthLink = authLinks.some(
-          (link) => matchStart >= link.start && matchEnd <= link.end
+        // L1: Only ignore api_key_inline if the VALUE part exactly matches the link's apiKeyValue.
+        // Don't ignore api_key_inline in continueUrl or elsewhere - only the actual Firebase apiKey param.
+        const keyValueMatch = match[0].match(/['":\s=]+([A-Za-z0-9_\-]+)$/i);
+        const keyValuePart = keyValueMatch ? keyValueMatch[1] : null;
+        const isExactApiKeyValue = authLinks.some(
+          (link) =>
+            link.apiKeyValue !== null &&
+            keyValuePart !== null &&
+            link.apiKeyValue === keyValuePart &&
+            matchStart >= link.start &&
+            matchEnd <= link.end
         );
-        if (!insideAuthLink) {
+        if (!isExactApiKeyValue) {
           return blockedResult(name, fieldPath, match[0].length);
         }
       }
