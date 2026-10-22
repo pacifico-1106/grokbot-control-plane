@@ -6,19 +6,31 @@
  * - Self-approval is forbidden
  * - Cross-org activation is forbidden
  * - Flag OFF means no activation
+ *
+ * Drive P1_DECISION_WORKFLOW_ENABLED via env (do not mock.module
+ * @/lib/feature-flags — that replaces the whole module and drops
+ * isAdminAuditSixFieldWriteEnabledForOrg / isAdminAuditWhoRequiredEnabledForOrg).
  */
 
-import { describe, expect, test, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { DEMO_ORG } from "@/lib/demo-data";
 import type { ApprovalRequest } from "@/lib/types";
 
-/** bun mock.module replaces the whole module — keep every admin-audit import. */
-function mockFeatureFlags(decisionOn: boolean) {
-  mock.module("@/lib/feature-flags", () => ({
-    isDecisionWorkflowEnabled: () => decisionOn,
-    isAdminAuditSixFieldWriteEnabledForOrg: () => false,
-    isAdminAuditWhoRequiredEnabledForOrg: () => false,
-  }));
+const DECISION = "P1_DECISION_WORKFLOW_ENABLED";
+let savedDecision: string | undefined;
+
+beforeEach(() => {
+  savedDecision = process.env[DECISION];
+});
+
+afterEach(() => {
+  if (savedDecision === undefined) delete process.env[DECISION];
+  else process.env[DECISION] = savedDecision;
+});
+
+function setDecisionWorkflow(on: boolean) {
+  if (on) process.env[DECISION] = "true";
+  else delete process.env[DECISION];
 }
 
 function makeDecisionApproval(
@@ -57,10 +69,8 @@ function makeDecisionApproval(
 }
 
 describe("Deputy activation — flag OFF behavior", () => {
-  mockFeatureFlags(false);
-
   test("validateDeputyActivation returns disabled when flag is OFF", async () => {
-    mockFeatureFlags(false);
+    setDecisionWorkflow(false);
     const { validateDeputyActivation } = await import("./deputy");
 
     const result = validateDeputyActivation(
@@ -80,7 +90,7 @@ describe("Deputy activation — flag OFF behavior", () => {
   });
 
   test("isDeputyActivationRequest returns false when flag is OFF", async () => {
-    mockFeatureFlags(false);
+    setDecisionWorkflow(false);
     const { isDeputyActivationRequest } = await import("./deputy");
 
     const approval = makeDecisionApproval(
@@ -93,10 +103,8 @@ describe("Deputy activation — flag OFF behavior", () => {
 });
 
 describe("Deputy activation — flag ON behavior", () => {
-  mockFeatureFlags(true);
-
   test("validateDeputyActivation allows valid deputy", async () => {
-    mockFeatureFlags(true);
+    setDecisionWorkflow(true);
     const { validateDeputyActivation } = await import("./deputy");
 
     const result = validateDeputyActivation(
@@ -113,7 +121,7 @@ describe("Deputy activation — flag ON behavior", () => {
   });
 
   test("SECURITY: rejects self-approval (deputy = requester)", async () => {
-    mockFeatureFlags(true);
+    setDecisionWorkflow(true);
     const { validateDeputyActivation } = await import("./deputy");
 
     const result = validateDeputyActivation(
@@ -133,7 +141,7 @@ describe("Deputy activation — flag ON behavior", () => {
   });
 
   test("SECURITY: rejects cross-org deputy", async () => {
-    mockFeatureFlags(true);
+    setDecisionWorkflow(true);
     const { validateDeputyActivation } = await import("./deputy");
 
     const result = validateDeputyActivation(
@@ -153,7 +161,7 @@ describe("Deputy activation — flag ON behavior", () => {
   });
 
   test("SECURITY: rejects deputy with null orgId", async () => {
-    mockFeatureFlags(true);
+    setDecisionWorkflow(true);
     const { validateDeputyActivation } = await import("./deputy");
 
     const result = validateDeputyActivation(
@@ -191,7 +199,7 @@ describe("Deputy activation — flag ON behavior", () => {
   });
 
   test("isDeputyActivationRequest returns true for deputy activation", async () => {
-    mockFeatureFlags(true);
+    setDecisionWorkflow(true);
     const { isDeputyActivationRequest } = await import("./deputy");
 
     const approval = makeDecisionApproval(
@@ -203,7 +211,7 @@ describe("Deputy activation — flag ON behavior", () => {
   });
 
   test("isDeputyActivationRequest returns false for regular decision", async () => {
-    mockFeatureFlags(true);
+    setDecisionWorkflow(true);
     const { isDeputyActivationRequest } = await import("./deputy");
 
     const approval = makeDecisionApproval();
