@@ -96,7 +96,11 @@ describe("internalAudienceRule.patch six-field", () => {
     const blob = JSON.stringify(row!.metadata);
     expect(blob).not.toContain(DOMAIN);
     expect(blob).not.toMatch(/gb_adm_|gb_emp_|sp_at_/);
-    const hash = row!.metadata?.ruleHashPrefix;
-    if (typeof hash === "string") expect(hash.length).toBeLessThanOrEqual(12);
+    expect(row!.metadata).not.toHaveProperty("ruleHashPrefix");
+    expect(row!.metadata?.ruleSummary).toEqual({
+      domainCount: 1,
+      teamCount: 0,
+      autoSlackTeamInternal: false,
+    });
   });
 });

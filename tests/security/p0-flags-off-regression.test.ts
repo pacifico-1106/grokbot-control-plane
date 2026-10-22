@@ -36,6 +36,8 @@ const {
   isAdminAuditWhoRequiredEnabledForOrg,
   isAdminAuditSixFieldWriteEnabled,
   isAdminAuditSixFieldWriteEnabledForOrg,
+  isAuditPageAdminWhoEnabled,
+  isAuditPageAdminWhoEnabledForOrg,
   isTenantSettingsHealthEnabled,
   isTenantSettingsHealthEnabledForOrg,
 } = await import("@/lib/feature-flags");
@@ -71,6 +73,11 @@ describe("FLAGS-OFF REGRESSION: Feature flags default to OFF", () => {
   test("ADMIN_AUDIT_SIX_FIELD_WRITE_ENABLED is OFF by default", () => {
     expect(isAdminAuditSixFieldWriteEnabled()).toBe(false);
     expect(isAdminAuditSixFieldWriteEnabledForOrg("org_any")).toBe(false);
+  });
+
+  test("AUDIT_PAGE_ADMIN_WHO_ENABLED is OFF by default", () => {
+    expect(isAuditPageAdminWhoEnabled()).toBe(false);
+    expect(isAuditPageAdminWhoEnabledForOrg("org_any")).toBe(false);
   });
 
   test("TENANT_SETTINGS_HEALTH_ENABLED is OFF by default", () => {

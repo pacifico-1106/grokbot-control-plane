@@ -1,6 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { AuditEvent } from "@/lib/types";
 import { resolveAuditActor } from "./actor";
+
+const PAGE_WHO = "AUDIT_PAGE_ADMIN_WHO_ENABLED";
+const PAGE_WHO_ORGS = "AUDIT_PAGE_ADMIN_WHO_ORG_IDS";
 
 const base = {
   id: "a",
@@ -184,5 +187,152 @@ describe("resolveAuditActor: emergency-stop trail uses started_by, not employee_
     expect(view.name).toBe("運営");
     expect(view.emailMasked).toBe("o***@staffpass.example");
     expect(JSON.stringify(view)).not.toContain("購買AI社員");
+  });
+});
+
+describe("AUDIT_PAGE_ADMIN_WHO: admin.* prefer actor_email / actorKind", () => {
+  const envBackup: Record<string, string | undefined> = {};
+  const lookups = {
+    employeesById: new Map([["emp_sales", { displayName: "営業AI社員" }]]),
+    membersByEmail: new Map([
+      ["reviewer@example.com", { displayName: "佐藤 花子", email: "reviewer@example.com" }],
+    ]),
+  };
+
+  function policyEvent(partial: Partial<AuditEvent> = {}): AuditEvent {
+    return {
+      ...base,
+      employeeId: "emp_sales",
+      action: "admin.policy",
+      summary: "営業AI社員 の権限を人確認のうえで更新",
+      actorEmail: "reviewer@example.com",
+      metadata: { actorKind: "human", tool: "policy.patch" },
+      ...partial,
+    } as AuditEvent;
+  }
+
+  beforeEach(() => {
+    envBackup[PAGE_WHO] = process.env[PAGE_WHO];
+    envBackup[PAGE_WHO_ORGS] = process.env[PAGE_WHO_ORGS];
+    delete process.env[PAGE_WHO];
+    delete process.env[PAGE_WHO_ORGS];
+  });
+
+  afterEach(() => {
+    for (const key of [PAGE_WHO, PAGE_WHO_ORGS]) {
+      if (envBackup[key] === undefined) delete process.env[key];
+      else process.env[key] = envBackup[key];
+    }
+  });
+
+  test("flag defaults OFF; missing orgId stays OFF", async () => {
+    const { isAuditPageAdminWhoEnabled, isAuditPageAdminWhoEnabledForOrg } = await import(
+      "@/lib/feature-flags"
+    );
+    expect(isAuditPageAdminWhoEnabled()).toBe(false);
+    expect(isAuditPageAdminWhoEnabledForOrg("org_a")).toBe(false);
+    expect(isAuditPageAdminWhoEnabledForOrg(null)).toBe(false);
+    expect(isAuditPageAdminWhoEnabledForOrg("")).toBe(false);
+  });
+
+  test("flag OFF: policy.patch with employee_id is still AI (today)", () => {
+    const view = resolveAuditActor(policyEvent(), lookups);
+    expect(view.kind).toBe("ai");
+    expect(view.name).toBe("営業AI社員");
+    expect(JSON.stringify(view)).not.toContain("佐藤 花子");
+  });
+
+  test("flag ON: policy.patch shows the human approver, not the target AI", () => {
+    process.env[PAGE_WHO] = "true";
+    const view = resolveAuditActor(policyEvent(), lookups);
+    expect(view.kind).toBe("human");
+    expect(view.name).toBe("佐藤 花子");
+    expect(view.emailMasked).toBe("r***@example.com");
+    expect(view.employeeId).toBeNull();
+    expect(JSON.stringify(view)).not.toContain("営業AI社員");
+    expect(JSON.stringify(view)).not.toContain("emp_sales");
+  });
+
+  test("flag ON: system / placeholder actorKind is システム, not AI", () => {
+    process.env[PAGE_WHO] = "true";
+    const system = resolveAuditActor(
+      policyEvent({
+        actorEmail: null,
+        metadata: { actorKind: "system", actorLabel: "管理MCP" },
+      }),
+      lookups
+    );
+    expect(system).toEqual({ kind: "system", name: "システム", emailMasked: null, employeeId: null });
+
+    const placeholder = resolveAuditActor(
+      policyEvent({
+        actorEmail: null,
+        metadata: { actorKind: "admin_agent", adminAgentId: "adm_1", generation: 1 },
+      }),
+      lookups
+    );
+    expect(placeholder).toEqual({ kind: "system", name: "システム", emailMasked: null, employeeId: null });
+  });
+
+  test("flag ON: admin_agent + approver email still shows the human", () => {
+    process.env[PAGE_WHO] = "true";
+    const view = resolveAuditActor(
+      policyEvent({
+        metadata: { actorKind: "admin_agent", adminAgentId: "adm_1", generation: 1 },
+      }),
+      lookups
+    );
+    expect(view.kind).toBe("human");
+    expect(view.name).toBe("佐藤 花子");
+  });
+
+  test("flag ON + org allowlist: other org stays today's AI", () => {
+    process.env[PAGE_WHO] = "true";
+    process.env[PAGE_WHO_ORGS] = "org_pilot_only";
+    const view = resolveAuditActor(policyEvent(), lookups);
+    expect(view.kind).toBe("ai");
+    expect(view.name).toBe("営業AI社員");
+  });
+
+  test("flag ON: non-admin.* with employee_id stays AI", () => {
+    process.env[PAGE_WHO] = "true";
+    const view = resolveAuditActor(
+      {
+        ...base,
+        employeeId: "emp_sales",
+        action: "tool.invoke",
+        summary: "x",
+        metadata: { actorKind: "human" },
+        actorEmail: "reviewer@example.com",
+      } as AuditEvent,
+      lookups
+    );
+    expect(view.kind).toBe("ai");
+    expect(view.name).toBe("営業AI社員");
+  });
+
+  test("flag ON: hold trail has no regression", () => {
+    process.env[PAGE_WHO] = "true";
+    const view = resolveAuditActor(
+      {
+        ...base,
+        employeeId: "emp_sales",
+        actorEmail: "owner@example.com",
+        action: "employee.hold.started",
+        summary: "緊急停止",
+        metadata: { startedBy: "member:mem_1" },
+      } as AuditEvent,
+      {
+        employeesById: new Map([["emp_sales", { displayName: "営業AI社員" }]]),
+        membersByEmail: new Map([
+          ["owner@example.com", { displayName: "山田 太郎", email: "owner@example.com" }],
+        ]),
+        membersById: new Map([["mem_1", { displayName: "山田 太郎", email: "owner@example.com" }]]),
+      }
+    );
+    expect(view.kind).toBe("human");
+    expect(view.name).toBe("山田 太郎");
+    expect(view.employeeId).toBeNull();
+    expect(JSON.stringify(view)).not.toContain("営業AI社員");
   });
 });

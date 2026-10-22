@@ -215,9 +215,32 @@ describe("six-field write contract", () => {
     expect(blob).not.toContain("secret-internal.example");
     expect(blob).not.toContain("TSECRETTEAM");
     expect(row!.metadata?.target).toEqual({ type: "org_internal_audience_rule", id: DEMO_ORG.id });
-    const hash = row!.metadata?.ruleHashPrefix;
-    expect(typeof hash === "string" || row!.metadata?.ruleSummary != null).toBe(true);
-    if (typeof hash === "string") expect(hash.length).toBeLessThanOrEqual(12);
+    expect(row!.metadata).not.toHaveProperty("ruleHashPrefix");
+    expect(row!.metadata?.ruleSummary).toEqual({
+      domainCount: 1,
+      teamCount: 1,
+      autoSlackTeamInternal: true,
+    });
+  });
+
+  test("L1: summarizeInternalAudienceRule keeps counts only (no SHA-256 prefix)", async () => {
+    const { summarizeInternalAudienceRule } = await import("@/lib/audit/admin-audit");
+    const a = summarizeInternalAudienceRule({
+      emailDomains: ["secret-internal.example"],
+      slackTeamIds: ["TSECRETTEAM"],
+      autoSlackTeamInternal: true,
+    });
+    const b = summarizeInternalAudienceRule({
+      emailDomains: ["other-internal.example"],
+      slackTeamIds: ["TOTHERTEAM"],
+      autoSlackTeamInternal: true,
+    });
+    expect(a).toEqual({
+      ruleSummary: { domainCount: 1, teamCount: 1, autoSlackTeamInternal: true },
+    });
+    expect(a).toEqual(b);
+    expect(JSON.stringify(a)).not.toContain("ruleHashPrefix");
+    expect(JSON.stringify(a)).not.toMatch(/[a-f0-9]{12}/);
   });
 
   test("L2: WHO flag ON rejects actorKind=system when an email is present", async () => {

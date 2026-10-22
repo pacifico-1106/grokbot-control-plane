@@ -57,7 +57,42 @@ const dirtyEvents: AuditEvent[] = [
     metadata: {},
     createdAt: "2026-10-16T03:00:00.000Z",
   },
+  {
+    id: "aud_policy",
+    orgId: ORG,
+    employeeId: "emp_sales",
+    credentialId: "cred_1",
+    actorEmail: "reviewer@example.com",
+    action: "admin.policy",
+    purpose: "admin.policy",
+    summary: "営業AI社員 の権限を人確認のうえで更新",
+    metadata: { actorKind: "human", tool: "policy.patch", approvalId: "apr_ok" },
+    createdAt: "2026-10-16T03:10:00.000Z",
+  },
+  {
+    id: "aud_hold",
+    orgId: ORG,
+    employeeId: "emp_sales",
+    credentialId: null,
+    actorEmail: "owner@example.com",
+    action: "employee.hold.started",
+    purpose: null,
+    summary: "緊急停止を開始",
+    metadata: { startedBy: "member:mem_1" },
+    createdAt: "2026-10-16T03:05:00.000Z",
+  },
 ];
+
+const reviewer: OrgMember = {
+  id: "mem_reviewer",
+  orgId: ORG,
+  email: "reviewer@example.com",
+  displayName: "佐藤 花子",
+  role: "admin",
+  jobRole: "admin",
+  capabilities: ["view_audit"],
+  status: "active",
+} as OrgMember;
 
 const listCalls: Array<string | null | undefined> = [];
 const approvalOrgCalls: string[] = [];
@@ -73,7 +108,8 @@ mock.module("@/lib/data", () => ({
   },
   listEmployees: async (orgId?: string | null) =>
     orgId === ORG ? [{ id: "emp_sales", displayName: "営業AI社員", orgId: ORG }] : [],
-  listMembers: async (orgId?: string | null) => (orgId === ORG ? [member(["view_audit"])] : []),
+  listMembers: async (orgId?: string | null) =>
+    orgId === ORG ? [member(["view_audit"]), reviewer] : [],
   listApprovalsByIds: async (orgId: string, ids: string[]) => {
     approvalOrgCalls.push(orgId);
     if (orgId !== ORG) return [];
@@ -158,6 +194,35 @@ describe("/app/audit readability", () => {
     expect(out).not.toContain("statusToken");
     expect(out).not.toContain("<pre");
     expect(out).not.toMatch(/\{[\s\S]*"tool":\s*"comm.reply"/);
+    expect(out).toContain(">AI</");
+    expect(out).toContain("営業AI社員");
+    expect(out).not.toContain("佐藤 花子");
+  });
+
+  test("AUDIT_PAGE_ADMIN_WHO ON: policy.patch shows the human, hold trail stays 人", async () => {
+    const flag = "AUDIT_PAGE_ADMIN_WHO_ENABLED";
+    const prev = process.env[flag];
+    process.env[flag] = "true";
+    try {
+      session = {
+        demo: false,
+        userId: "u1",
+        email: "owner@example.com",
+        orgId: ORG,
+        member: member(["view_dashboard", "view_audit"]),
+      };
+      const out = await html();
+      expect(out).toContain("佐藤 花子");
+      expect(out).toContain("r***@example.com");
+      expect(out).toContain(">AI</");
+      expect(out).toContain("営業AI社員");
+      expect(out).toContain("山田 太郎");
+      expect(out).toContain("緊急停止を開始");
+      expect(out).not.toContain("reviewer@example.com");
+    } finally {
+      if (prev === undefined) delete process.env[flag];
+      else process.env[flag] = prev;
+    }
   });
 
   test("no org id does not list other tenants' events", async () => {
