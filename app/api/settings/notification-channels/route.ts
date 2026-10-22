@@ -53,6 +53,7 @@ export async function PUT(req: Request) {
     const authority = await assertWebActorApproverAuthority({
       orgId: gate.orgId,
       memberId: await webSessionActorMemberId(req),
+      actorEmail: gate.email,
       changes: [{ tool: "setup.slackApprover.set", adminMutation: {} }],
       surface: "settings.notification_channels",
     });

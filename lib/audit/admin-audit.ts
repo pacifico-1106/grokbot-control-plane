@@ -1,15 +1,18 @@
 /**
  * Required identity on every admin.* audit write.
  * Human tap → actor_email + actorKind=human.
- * Admin AI key (gb_adm_) → metadata.adminAgentId + generation + actorKind=admin_agent.
+ * Admin AI key (gb_adm_) → metadata.adminAgentId + generation + actorKind=admin_agent
+ * (flag OFF). With ADMIN_AUDIT_WHO_REQUIRED_ENABLED, admin_agent / cron / webhook
+ * / system paths write actorKind=system + actorLabel. Never fabricate an email.
  * Never persist secrets, full hashes, or full secret prefixes.
  */
 import { parseAdminRequester } from "@/lib/admin-mcp/self-approval";
-import { extractEmail } from "@/lib/audit/mask";
+import { extractEmail, isEmailLike } from "@/lib/audit/mask";
 import { appendAuditEvent } from "@/lib/data/audit";
+import { isAdminAuditWhoRequiredEnabledForOrg } from "@/lib/feature-flags";
 import type { AuditAction, AuditEvent } from "@/lib/types";
 
-export type AdminAuditActorKind = "human" | "admin_agent";
+export type AdminAuditActorKind = "human" | "admin_agent" | "system";
 
 export type HumanAdminAuditActor = {
   actorKind: "human";
@@ -25,7 +28,25 @@ export type AdminAgentAuditActor = {
   actorEmail?: string | null;
 };
 
-export type AdminAuditActor = HumanAdminAuditActor | AdminAgentAuditActor;
+export type SystemAdminAuditActor = {
+  actorKind: "system";
+  actorLabel: string;
+  adminAgentId?: string;
+  generation?: number;
+};
+
+export type AdminAuditActor = HumanAdminAuditActor | AdminAgentAuditActor | SystemAdminAuditActor;
+
+/** Short, non-PII labels for system / cron / webhook / admin-agent paths. */
+export const ADMIN_AUDIT_SYSTEM_LABEL = {
+  adminMcp: "管理MCP",
+  ingress: "ingress",
+  cardSetup: "カード登録",
+  cardPortal: "カードポータル",
+  web: "web",
+} as const;
+
+const MAX_ACTOR_LABEL = 40;
 
 const SECRET_KEY =
   /^(oneTimeSecret|rawSecret|secret|token|password|bearer|authorization|credential|secretHash|credentialFingerprint|pollUrl|pollPath|poll_path|statusToken|status_token)$/i;
@@ -50,11 +71,37 @@ export function adminAgentAuditActor(adminAgentId: string, generation: number): 
   return { actorKind: "admin_agent", adminAgentId: id, generation };
 }
 
+export function systemAdminActor(
+  label: string,
+  extras?: { adminAgentId?: string; generation?: number }
+): SystemAdminAuditActor {
+  const actorLabel = String(label ?? "").trim();
+  if (!actorLabel) throw new Error("admin_audit_actorLabel_required");
+  if (actorLabel.length > MAX_ACTOR_LABEL) throw new Error("admin_audit_actorLabel_too_long");
+  if (actorLabel.includes("@") || isEmailLike(actorLabel)) {
+    throw new Error("admin_audit_actorLabel_email_forbidden");
+  }
+  rejectSecretsInValue(actorLabel, "actorLabel");
+  const out: SystemAdminAuditActor = { actorKind: "system", actorLabel };
+  const id = extras?.adminAgentId ? String(extras.adminAgentId).trim() : "";
+  if (id) out.adminAgentId = id;
+  if (extras && Number.isFinite(extras.generation)) out.generation = extras.generation;
+  return out;
+}
+
 export function adminActorMetadata(actor: AdminAuditActor): Record<string, unknown> {
   if (actor.actorKind === "human") {
     return {
       actorKind: "human" as const,
       ...(actor.actorMemberId ? { actorMemberId: actor.actorMemberId } : {}),
+    };
+  }
+  if (actor.actorKind === "system") {
+    return {
+      actorKind: "system" as const,
+      actorLabel: actor.actorLabel,
+      ...(actor.adminAgentId ? { adminAgentId: actor.adminAgentId } : {}),
+      ...(Number.isFinite(actor.generation) ? { generation: actor.generation } : {}),
     };
   }
   return {
@@ -121,6 +168,8 @@ export async function resolveAdminAuditActor(input: {
   approval?: AdminAuditApprovalRef | null;
   orgId?: string | null;
   fallbackHuman?: { email: string; memberId?: string | null } | null;
+  /** Used only when the who-required flag applies: system path, no human session. */
+  systemLabel?: string | null;
 }): Promise<AdminAuditActor> {
   if (input.cred?.adminAgentId) {
     return adminAgentAuditActor(input.cred.adminAgentId, input.cred.generation);
@@ -134,6 +183,9 @@ export async function resolveAdminAuditActor(input: {
     } catch {
       /* fall through */
     }
+  }
+  if (input.orgId && isAdminAuditWhoRequiredEnabledForOrg(input.orgId) && input.systemLabel) {
+    return systemAdminActor(input.systemLabel);
   }
   if (input.orgId) {
     try {
@@ -153,7 +205,7 @@ async function attachApproverEmail(
   approval: AdminAuditApprovalRef,
   orgId?: string | null
 ): Promise<AdminAuditActor> {
-  if (actor.actorKind === "human") return actor;
+  if (actor.actorKind === "human" || actor.actorKind === "system") return actor;
   if (extractEmail(actor.actorEmail)) return actor;
   const fromResolved = extractEmail(approval.resolvedBy);
   if (fromResolved) return { ...actor, actorEmail: fromResolved };
@@ -161,7 +213,8 @@ async function attachApproverEmail(
   if (!memberId || !orgId) return actor;
   const { getMemberById } = await import("@/lib/data/members");
   const member = await getMemberById(memberId, orgId).catch(() => null);
-  const email = extractEmail(member?.email);
+  if (!member || member.orgId !== orgId) return actor;
+  const email = extractEmail(member.email);
   return email ? { ...actor, actorEmail: email } : actor;
 }
 
@@ -242,6 +295,7 @@ export function assertAdminAuditIdentity(event: {
   actorEmail?: string | null;
   summary?: string | null;
   metadata?: Record<string, unknown> | null;
+  orgId?: string | null;
 }): void {
   const action = (event.action || "").trim();
   if (!action.startsWith("admin.")) {
@@ -249,17 +303,33 @@ export function assertAdminAuditIdentity(event: {
   }
   const metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : {};
   const actorKind = metadata.actorKind;
-  if (actorKind !== "human" && actorKind !== "admin_agent") {
-    throw new Error("admin_audit_actorKind_required");
-  }
-  if (actorKind === "human") {
-    const email = asEmail(event.actorEmail) ?? asEmail(metadata.actorEmail);
-    if (!email) throw new Error("admin_audit_actor_email_required");
+  const whoRequired = isAdminAuditWhoRequiredEnabledForOrg(event.orgId);
+  if (whoRequired) {
+    if (actorKind === "human") {
+      const email = asEmail(event.actorEmail) ?? asEmail(metadata.actorEmail);
+      if (!email) throw new Error("admin_audit_actor_email_required");
+    } else if (actorKind === "system") {
+      const label = typeof metadata.actorLabel === "string" ? metadata.actorLabel.trim() : "";
+      if (!label) throw new Error("admin_audit_actorLabel_required");
+      if (label.includes("@") || isEmailLike(label)) {
+        throw new Error("admin_audit_actorLabel_email_forbidden");
+      }
+    } else {
+      throw new Error("admin_audit_actorKind_required");
+    }
   } else {
-    const adminAgentId = typeof metadata.adminAgentId === "string" ? metadata.adminAgentId.trim() : "";
-    if (!adminAgentId) throw new Error("admin_audit_adminAgentId_required");
-    if (!Number.isFinite(Number(metadata.generation))) {
-      throw new Error("admin_audit_generation_required");
+    if (actorKind !== "human" && actorKind !== "admin_agent") {
+      throw new Error("admin_audit_actorKind_required");
+    }
+    if (actorKind === "human") {
+      const email = asEmail(event.actorEmail) ?? asEmail(metadata.actorEmail);
+      if (!email) throw new Error("admin_audit_actor_email_required");
+    } else {
+      const adminAgentId = typeof metadata.adminAgentId === "string" ? metadata.adminAgentId.trim() : "";
+      if (!adminAgentId) throw new Error("admin_audit_adminAgentId_required");
+      if (!Number.isFinite(Number(metadata.generation))) {
+        throw new Error("admin_audit_generation_required");
+      }
     }
   }
   rejectSecrets(metadata);
@@ -315,6 +385,26 @@ export async function ensureAdminRevokeAudit(input: {
   });
 }
 
+function normalizeAdminWhoActor(actor: AdminAuditActor, orgId: string): AdminAuditActor {
+  if (!isAdminAuditWhoRequiredEnabledForOrg(orgId)) return actor;
+  if (actor.actorKind !== "admin_agent") return actor;
+  return systemAdminActor(ADMIN_AUDIT_SYSTEM_LABEL.adminMcp, {
+    adminAgentId: actor.adminAgentId,
+    generation: actor.generation,
+  });
+}
+
+function actorEmailForWrite(
+  original: AdminAuditActor,
+  eventEmail: string | null | undefined,
+  whoRequired: boolean
+): string | null {
+  if (original.actorKind === "human") return original.actorEmail;
+  const fromActor = original.actorKind === "admin_agent" ? original.actorEmail ?? null : null;
+  if (whoRequired) return extractEmail(fromActor);
+  return eventEmail ?? fromActor ?? null;
+}
+
 export async function appendAdminAuditEvent(
   event: Omit<AuditEvent, "id" | "createdAt" | "actorEmail" | "metadata"> & {
     actor: AdminAuditActor;
@@ -323,13 +413,18 @@ export async function appendAdminAuditEvent(
     action: AuditAction;
   }
 ): Promise<void> {
-  const actorMeta = adminActorMetadata(event.actor);
+  const whoRequired = isAdminAuditWhoRequiredEnabledForOrg(event.orgId);
+  const actor = normalizeAdminWhoActor(event.actor, event.orgId);
+  const actorMeta = adminActorMetadata(actor);
   const metadata = { ...(event.metadata ?? {}), ...actorMeta };
-  const actorEmail =
-    event.actor.actorKind === "human"
-      ? event.actor.actorEmail
-      : (event.actorEmail ?? event.actor.actorEmail ?? null);
-  assertAdminAuditIdentity({ action: event.action, actorEmail, summary: event.summary, metadata });
+  const actorEmail = actorEmailForWrite(event.actor, event.actorEmail, whoRequired);
+  assertAdminAuditIdentity({
+    action: event.action,
+    actorEmail,
+    summary: event.summary,
+    metadata,
+    orgId: event.orgId,
+  });
   await appendAuditEvent({
     orgId: event.orgId,
     employeeId: event.employeeId,

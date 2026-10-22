@@ -28,6 +28,8 @@ export const ADMIN_AUDIT_ACTIONS = [
   "admin.billing",
   "admin.external_contract_card",
   "admin.portal",
+  "admin.card_setup_link_mint",
+  "admin.card_portal_link_mint",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];
@@ -73,6 +75,8 @@ export const ADMIN_TOOL_AUDIT_ACTION: Record<string, AdminAuditAction> = {
   "parties.remove": "admin.parties",
   "approvers.designatedAdmins.set": "admin.policy",
   "members.promoteOwner": "admin.policy",
+  "cardSetup.mintLink": "admin.card_setup_link_mint",
+  "cardSetup.mintPortalLink": "admin.card_portal_link_mint",
 };
 
 /** Operational / employee-badge class — never lead the dashboard change log. */

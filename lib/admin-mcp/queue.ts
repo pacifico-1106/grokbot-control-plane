@@ -11,7 +11,13 @@
  */
 import { sendApprovalNeededEmail } from "@/lib/email";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
-import { adminAgentAuditActor, appendAdminAuditEvent } from "@/lib/audit/admin-audit";
+import {
+  ADMIN_AUDIT_SYSTEM_LABEL,
+  adminAgentAuditActor,
+  appendAdminAuditEvent,
+  systemAdminActor,
+  type AdminAuditActor,
+} from "@/lib/audit/admin-audit";
 import { createApproval } from "@/lib/data";
 import { getOrgOwnerIds } from "@/lib/data/members";
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
@@ -29,12 +35,23 @@ import {
 } from "@/lib/security/secret-detection-audit";
 import { checkAdminPolicyRequirement } from "@/lib/approval-workflow/admin-policy";
 import { getOrgApprovalWorkflowPolicy } from "@/lib/approval-workflow/data";
-import { isAdminApproverPolicyRequired } from "@/lib/feature-flags";
+import { isAdminApproverPolicyRequired, isAdminAuditWhoRequiredEnabledForOrg } from "@/lib/feature-flags";
 import { approverFilingStop } from "@/lib/approver-authority/filing";
 import { ADMIN_TOOL_TITLE_JA } from "@/lib/admin-mcp/tool-titles-ja";
 import { approvalTicketPolicyMetadata } from "@/lib/comm/line-web-only-high-risk";
 
 export { ADMIN_TOOL_TITLE_JA };
+
+function queueAdminActor(cred: ResolvedAdminCredential): AdminAuditActor {
+  const id = cred.adminAgentId || cred.actorId;
+  if (isAdminAuditWhoRequiredEnabledForOrg(cred.orgId)) {
+    return systemAdminActor(ADMIN_AUDIT_SYSTEM_LABEL.adminMcp, {
+      adminAgentId: id,
+      generation: cred.generation,
+    });
+  }
+  return adminAgentAuditActor(id, cred.generation);
+}
 
 export type AdminQueueResult = {
   needs_approval: true;
@@ -164,7 +181,7 @@ export async function queueAdminTool(input: {
         action: "admin.policy",
         purpose: auditActionForAdminTool(input.tool),
         summary: `管理クラス承認拒否（承認者未設定）: ${input.tool}`,
-        actor: adminAgentAuditActor(input.cred.adminAgentId || input.cred.actorId, input.cred.generation),
+        actor: queueAdminActor(input.cred),
         metadata: {
           tool: input.tool,
           code: policyCheck.code,
@@ -220,10 +237,10 @@ export async function queueAdminTool(input: {
       action: "admin.policy",
       purpose: auditAction,
       summary: `承認者権限により申請を停止: ${input.tool}`,
-      actor: adminAgentAuditActor(input.cred.adminAgentId || input.cred.actorId, input.cred.generation),
-      metadata: {
-        tool: input.tool,
-        code: authorityStop.reason,
+        actor: queueAdminActor(input.cred),
+        metadata: {
+          tool: input.tool,
+          code: authorityStop.reason,
         requiredApproverKind: authorityStop.requiredApproverKind,
         auditClass: ADMIN_AUDIT_CLASS,
       },
@@ -282,9 +299,9 @@ export async function queueAdminTool(input: {
     action: auditAction,
     purpose: auditAction,
     summary: `承認待ち: ${title}`,
-    actor: adminAgentAuditActor(input.cred.adminAgentId || input.cred.actorId, input.cred.generation),
-    metadata: {
-      approvalId: created.approval.id,
+        actor: queueAdminActor(input.cred),
+        metadata: {
+          approvalId: created.approval.id,
       tool: input.tool,
       auditClass: ADMIN_AUDIT_CLASS,
       always_human: true,

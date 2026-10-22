@@ -46,6 +46,8 @@ describe("admin.* audit writes go through the shared helper", () => {
       "lib/admin-mcp/fulfill-admin.ts",
       "lib/admin-mcp/orgs-issue-admin-credential.ts",
       "lib/admin-mcp/queue.ts",
+      "lib/external-contract-card/queue-card-setup.ts",
+      "lib/external-contract-card/queue-portal-link.ts",
     ];
     for (const rel of required) {
       const src = sources.find((s) => s.path === rel);

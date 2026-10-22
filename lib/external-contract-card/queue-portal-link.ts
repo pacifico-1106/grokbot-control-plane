@@ -15,8 +15,15 @@
 import type { ResolvedAdminCredential } from "@/lib/auth/admin-credential";
 import { sendApprovalNeededEmail } from "@/lib/email";
 import { sendApprovalNotifications } from "@/lib/notify/channels";
-import { appendAuditEvent, createApproval } from "@/lib/data";
+import { createApproval } from "@/lib/data";
 import type { AdminRequester } from "@/lib/admin-mcp/self-approval";
+import {
+  ADMIN_AUDIT_SYSTEM_LABEL,
+  adminAgentAuditActor,
+  appendAdminAuditEvent,
+  systemAdminActor,
+} from "@/lib/audit/admin-audit";
+import { isAdminAuditWhoRequiredEnabledForOrg } from "@/lib/feature-flags";
 import { checkExternalContractCardSetupFlag } from "./feature-flag";
 
 const PORTAL_AUDIT_CLASS = "external_contract_card_portal";
@@ -104,13 +111,20 @@ export async function queuePortalLinkMint(input: {
     },
   });
 
-  await appendAuditEvent({
+  const actorId = input.cred.adminAgentId || input.cred.actorId;
+  await appendAdminAuditEvent({
     orgId: input.cred.orgId,
     employeeId: null,
     credentialId: null,
-    action: PORTAL_AUDIT_ACTION as Parameters<typeof appendAuditEvent>[0]["action"],
+    action: PORTAL_AUDIT_ACTION,
     purpose: PORTAL_AUDIT_ACTION,
     summary: `承認待ち: ${title}`,
+    actor: isAdminAuditWhoRequiredEnabledForOrg(input.cred.orgId)
+      ? systemAdminActor(ADMIN_AUDIT_SYSTEM_LABEL.cardPortal, {
+          adminAgentId: actorId,
+          generation: input.cred.generation,
+        })
+      : adminAgentAuditActor(actorId, input.cred.generation),
     metadata: {
       approvalId: created.approval.id,
       tool,

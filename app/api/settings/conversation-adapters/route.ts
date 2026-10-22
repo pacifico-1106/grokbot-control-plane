@@ -36,6 +36,7 @@ export async function PUT(req: Request) {
     const authority = await assertWebActorApproverAuthority({
       orgId: gate.orgId,
       memberId: await webSessionActorMemberId(req),
+      actorEmail: gate.email,
       changes: [{ tool: "web.conversationAdapter", adminMutation: { changedFields }, kind: "owner_or_designated_admin" }],
       surface: "settings.conversation_adapters",
     });
