@@ -2,7 +2,7 @@ import { ProjectAccessOrgError, projectAccessRefusalBody } from "@/lib/employees
 import { credentialExpiresAtFromNow, issueExpiryDays } from "@/lib/employees/credential-ttl";
 import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
 import { buildMcpHandoff, parseMcpHandoff, type McpHandoff } from "@/lib/mcp/endpoint-handoff-block";
-import { isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
+import { isAdminAuditSixFieldWriteEnabledForOrg, isMcpEndpointHandoffEnabled } from "@/lib/feature-flags";
 import { isDemoMode } from "@/lib/mode";
 import { executeApproval } from "@/lib/approvals/execution";
 import { fulfillWorkflowMutation } from "@/lib/approval-workflow/admin";
@@ -18,7 +18,12 @@ import { setOrgInternalAudienceRule, validateInternalAudienceRulePatch } from "@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { normalizeActionLimits } from "@/lib/action-gate";
-import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import {
+  appendAdminAuditEvent,
+  resolveAdminAuditActor,
+  summarizeInternalAudienceRule,
+} from "@/lib/audit/admin-audit";
+import { AUDIT_REASON_JA } from "@/lib/audit/result";
 import {
   getEmployee,
   issueEmployee,
@@ -2310,10 +2315,27 @@ async function fulfillApprovedAdminCore(
       case "internalAudienceRule.patch": {
         const rule = validateInternalAudienceRulePatch(args);
         await setOrgInternalAudienceRule(approval.orgId, rule, approval.resolvedBy || "admin_mcp");
-        await appendAdminAuditEvent({ orgId: approval.orgId, employeeId: null, credentialId: null,
-          action: "admin.policy", purpose: "admin.policy", summary: "社内判定ルールを更新（管理MCP・人承認）",
+        const sixField = isAdminAuditSixFieldWriteEnabledForOrg(approval.orgId);
+        await appendAdminAuditEvent({
+          orgId: approval.orgId,
+          employeeId: null,
+          credentialId: null,
+          action: "admin.policy",
+          purpose: "admin.policy",
+          summary: "社内判定ルールを更新（管理MCP・人承認）",
           actor: await resolveAdminAuditActor({ approval, orgId: approval.orgId }),
-          metadata: { approvalId: approval.id, auditClass: ADMIN_AUDIT_CLASS, rule },
+          ...(sixField
+            ? {
+                target: { type: "org_internal_audience_rule", id: approval.orgId },
+                reason: { code: "approved", labelJa: AUDIT_REASON_JA.approved.ja },
+                result: "success" as const,
+                metadata: {
+                  approvalId: approval.id,
+                  auditClass: ADMIN_AUDIT_CLASS,
+                  ...summarizeInternalAudienceRule(rule),
+                },
+              }
+            : { metadata: { approvalId: approval.id, auditClass: ADMIN_AUDIT_CLASS, rule } }),
         });
         fulfillment = { ok: true, tool, at };
         break;

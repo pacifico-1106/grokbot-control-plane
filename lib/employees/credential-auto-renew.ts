@@ -11,7 +11,7 @@ import { requesterOf, selfBound } from "@/lib/admin-mcp/allowed-accounts-tools";
 import { rejectUnsafeArgs } from "@/lib/admin-mcp/slack-dm-setup";
 import { approverFilingStop } from "@/lib/approver-authority/filing";
 import { createApproval, getApprovalById } from "@/lib/data";
-import { appendAuditEvent } from "@/lib/data/audit";
+import { adminAuditReason, appendAdminClassAuditEvent } from "@/lib/audit/admin-audit";
 import { getBinding } from "@/lib/data/bindings";
 import {
   expireStaleCredentialRenewalRows,
@@ -241,13 +241,17 @@ export async function recordCredentialAutoRenewFiling(input: {
     threshold: "now",
   });
   if (!row) return { ok: false, code: "already_pending", message: "進行中の社員証更新があります。" };
-  await appendAuditEvent({
+  await appendAdminClassAuditEvent({
     orgId: input.orgId,
     employeeId: input.employeeId,
     credentialId: input.oldCredentialId,
-    action: "credential.renew_proposed",
+    legacyAction: "credential.renew_proposed",
+    adminAction: "admin.credential.renew_proposed",
     purpose: "admin.policy",
     summary: "社員証の今すぐ更新を起票",
+    target: { type: "employee", id: input.employeeId },
+    reason: adminAuditReason("needs_approval"),
+    result: "pending",
     metadata: {
       approvalId: input.approvalId,
       employeeId: input.employeeId,
@@ -331,17 +335,33 @@ export async function fulfillCredentialAutoRenew(
   const orgId = approval.orgId;
   const employeeId = typeof args.employeeId === "string" ? args.employeeId.trim() : "";
   const audit = async (action: "credential.renew_approved" | "credential.renew_rejected" | "credential.renew_skipped_hold", extra: Record<string, unknown>) =>
-    appendAuditEvent({
+    appendAdminClassAuditEvent({
       orgId,
       employeeId: employeeId || null,
       credentialId: null,
       actorEmail: approval.resolvedBy ?? undefined,
-      action,
+      approval,
+      legacyAction: action,
+      adminAction: `admin.${action}` as
+        | "admin.credential.renew_approved"
+        | "admin.credential.renew_rejected"
+        | "admin.credential.renew_skipped_hold",
       purpose: "admin.policy",
       summary:
         action === "credential.renew_approved"
           ? "社員証の今すぐ更新を承認（まだ発行していません）"
           : `社員証の今すぐ更新を中止（${String(extra.code)}）`,
+      target: employeeId ? { type: "employee", id: employeeId } : { type: "approval", id: approval.id },
+      reason: adminAuditReason(
+        action === "credential.renew_approved"
+          ? "approved"
+          : action === "credential.renew_skipped_hold"
+            ? "approval_held"
+            : typeof extra.code === "string"
+              ? extra.code
+              : "rejected"
+      ),
+      result: action === "credential.renew_approved" ? "success" : "denied",
       metadata: {
         approvalId: approval.id,
         employeeId: employeeId || null,

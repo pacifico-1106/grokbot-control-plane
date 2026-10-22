@@ -24,7 +24,7 @@
  * imports the flag + sets from here).
  */
 import type { NotificationChannelRuntime } from "@/lib/data/notification-channels";
-import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { adminAuditReason, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 
 function parseFlag(value: string | undefined): boolean {
   const v = (value ?? "").trim().toLowerCase();
@@ -294,6 +294,9 @@ export async function notifyApprovalAppFixRequired(input: {
       credentialId: null,
       action: "admin.notificationChannel",
       purpose: "admin.notificationChannel",
+      target: { type: "org", id: orgId },
+      reason: adminAuditReason("rejected"),
+      result: "denied",
       summary: isScope
         ? `承認アプリに Slack の権限 ${scope} がないため、入れ直しを依頼しました（${tool}）`
         : `${APPROVAL_APP_FIX_NOTICE_JA[fixCode].subject}。直してからの再実行を依頼しました（${code} / ${tool}）`,

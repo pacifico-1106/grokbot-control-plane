@@ -20,7 +20,7 @@ import { getApprovalWorkflowProgress, getCurrentStageVoterUserIds } from "@/lib/
 import { isInboxRoutingEnabled } from "@/lib/feature-flags";
 import { routeInboxToResponsibleHuman } from "@/lib/notify/inbox-routing";
 import { isSharedApprovalAppEnabled } from "@/lib/slack/shared-approval-flags";
-import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { adminAuditReason, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 /**
  * Org notification channels (Telegram / LINE / Slack).
  * Slack here is the approval *inbox* only. Conversation posting uses
@@ -418,6 +418,9 @@ export async function notifyOwnersApproverAuthorityApproved(
     action: "admin.policy",
     purpose: "approver_authority.owner_notice",
     summary: `承認の事後通知（オーナー ${result.owners} 人）`,
+    target: { type: "approval", id: approval.id },
+    reason: adminAuditReason("approved"),
+    result: "success",
     metadata: { approvalId: approval.id, tool: approval.tool ?? null, ...result },
   }).catch(() => undefined);
   return result;
@@ -507,6 +510,9 @@ export async function notifyOwnerPromoted(
     action: "admin.policy",
     purpose: "owner_promotion.notice",
     summary: `オーナー追加の通知（${result.recipients} 人）`,
+    target: { type: "approval", id: approval.id },
+    reason: adminAuditReason("approved"),
+    result: "success",
     metadata: { approvalId: approval.id, tool: "members.promoteOwner", targetMemberId: input.targetMemberId, ...result },
   }).catch(() => undefined);
   return result;

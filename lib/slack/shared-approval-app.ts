@@ -23,7 +23,7 @@
  * Tokens / secrets are never logged, audited or returned.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { adminAuditReason, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { findSlackConversationAdaptersByTeam, listConversationAdapters } from "@/lib/data/conversation-adapters";
 import {
@@ -325,6 +325,9 @@ async function auditInstall(orgId: string, actorEmail: string | null, ok: boolea
     action: "admin.notificationChannel",
     purpose: "admin.notificationChannel",
     summary,
+    target: { type: "org", id: orgId },
+    reason: adminAuditReason(ok ? "approved" : "rejected"),
+    result: ok ? "success" : "denied",
     metadata: {
       auditClass: "admin",
       event: ok ? "shared_approval_app.installed" : "shared_approval_app.install_rejected",

@@ -6,10 +6,15 @@
  * / system paths write actorKind=system + actorLabel. Never fabricate an email.
  * Never persist secrets, full hashes, or full secret prefixes.
  */
+import { createHash } from "node:crypto";
 import { parseAdminRequester } from "@/lib/admin-mcp/self-approval";
 import { extractEmail, isEmailLike } from "@/lib/audit/mask";
+import { AUDIT_REASON_JA } from "@/lib/audit/result";
 import { appendAuditEvent } from "@/lib/data/audit";
-import { isAdminAuditWhoRequiredEnabledForOrg } from "@/lib/feature-flags";
+import {
+  isAdminAuditSixFieldWriteEnabledForOrg,
+  isAdminAuditWhoRequiredEnabledForOrg,
+} from "@/lib/feature-flags";
 import type { AuditAction, AuditEvent } from "@/lib/types";
 
 export type AdminAuditActorKind = "human" | "admin_agent" | "system";
@@ -36,6 +41,21 @@ export type SystemAdminAuditActor = {
 };
 
 export type AdminAuditActor = HumanAdminAuditActor | AdminAgentAuditActor | SystemAdminAuditActor;
+
+/** Target of an admin.* write: type + id only. No secrets or PII. */
+export type AdminAuditTarget = { type: string; id: string };
+
+/** Short reason code plus a Japanese label. No secrets or PII. */
+export type AdminAuditReason = { code: string; labelJa: string };
+
+/** Write-side result. UI may map error → failure. */
+export type AdminAuditResult = "success" | "denied" | "error" | "pending";
+
+const ADMIN_AUDIT_RESULTS = new Set<AdminAuditResult>(["success", "denied", "error", "pending"]);
+const REASON_CODE_RE = /^[a-z][a-z0-9._-]{0,63}$/i;
+const MAX_TARGET_TYPE = 64;
+const MAX_TARGET_ID = 128;
+const MAX_REASON_LABEL = 80;
 
 /** Short, non-PII labels for system / cron / webhook / admin-agent paths. */
 export const ADMIN_AUDIT_SYSTEM_LABEL = {
@@ -314,6 +334,8 @@ export function assertAdminAuditIdentity(event: {
       if (label.includes("@") || isEmailLike(label)) {
         throw new Error("admin_audit_actorLabel_email_forbidden");
       }
+      const systemEmail = asEmail(event.actorEmail) ?? asEmail(metadata.actorEmail);
+      if (systemEmail) throw new Error("admin_audit_system_email_forbidden");
     } else {
       throw new Error("admin_audit_actorKind_required");
     }
@@ -388,21 +410,181 @@ export async function ensureAdminRevokeAudit(input: {
 function normalizeAdminWhoActor(actor: AdminAuditActor, orgId: string): AdminAuditActor {
   if (!isAdminAuditWhoRequiredEnabledForOrg(orgId)) return actor;
   if (actor.actorKind !== "admin_agent") return actor;
+  const email = extractEmail(actor.actorEmail);
+  if (email) return humanAdminActor(email);
   return systemAdminActor(ADMIN_AUDIT_SYSTEM_LABEL.adminMcp, {
     adminAgentId: actor.adminAgentId,
     generation: actor.generation,
   });
 }
 
-function actorEmailForWrite(
-  original: AdminAuditActor,
-  eventEmail: string | null | undefined,
-  whoRequired: boolean
-): string | null {
-  if (original.actorKind === "human") return original.actorEmail;
-  const fromActor = original.actorKind === "admin_agent" ? original.actorEmail ?? null : null;
-  if (whoRequired) return extractEmail(fromActor);
-  return eventEmail ?? fromActor ?? null;
+function actorEmailForWrite(actor: AdminAuditActor, eventEmail: string | null | undefined, whoRequired: boolean): string | null {
+  if (actor.actorKind === "human") return actor.actorEmail;
+  if (actor.actorKind === "system") return whoRequired ? null : eventEmail ?? null;
+  return eventEmail ?? actor.actorEmail ?? null;
+}
+
+export function adminAuditReason(code: string, fallbackJa?: string): AdminAuditReason {
+  const trimmed = String(code ?? "").trim();
+  const mapped = AUDIT_REASON_JA[trimmed];
+  return { code: trimmed, labelJa: mapped?.ja ?? fallbackJa ?? `理由コード: ${trimmed || "不明"}` };
+}
+
+export function adminSixFieldAction<T extends string, U extends AuditAction>(
+  orgId: string,
+  legacy: T,
+  admin: U
+): T | U {
+  return isAdminAuditSixFieldWriteEnabledForOrg(orgId) ? admin : legacy;
+}
+
+export function summarizeInternalAudienceRule(rule: unknown): {
+  ruleHashPrefix: string;
+  ruleSummary: { domainCount: number; teamCount: number; autoSlackTeamInternal: boolean };
+} {
+  const obj = rule && typeof rule === "object" ? (rule as Record<string, unknown>) : {};
+  const domains = Array.isArray(obj.emailDomains) ? obj.emailDomains.map(String) : [];
+  const teams = Array.isArray(obj.slackTeamIds) ? obj.slackTeamIds.map(String) : [];
+  const canonical = JSON.stringify({
+    emailDomains: [...domains].sort(),
+    slackTeamIds: [...teams].sort(),
+    autoSlackTeamInternal: obj.autoSlackTeamInternal === true,
+  });
+  return {
+    ruleHashPrefix: createHash("sha256").update(canonical).digest("hex").slice(0, 12),
+    ruleSummary: {
+      domainCount: domains.length,
+      teamCount: teams.length,
+      autoSlackTeamInternal: obj.autoSlackTeamInternal === true,
+    },
+  };
+}
+
+function isTarget(value: unknown): value is AdminAuditTarget {
+  if (!value || typeof value !== "object") return false;
+  const t = value as AdminAuditTarget;
+  return typeof t.type === "string" && t.type.trim() !== "" && typeof t.id === "string" && t.id.trim() !== "";
+}
+
+function isReason(value: unknown): value is AdminAuditReason {
+  if (!value || typeof value !== "object") return false;
+  const r = value as AdminAuditReason;
+  return typeof r.code === "string" && r.code.trim() !== "" && typeof r.labelJa === "string" && r.labelJa.trim() !== "";
+}
+
+function isResult(value: unknown): value is AdminAuditResult {
+  return typeof value === "string" && ADMIN_AUDIT_RESULTS.has(value as AdminAuditResult);
+}
+
+function shortCode(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const t = value.trim();
+  return REASON_CODE_RE.test(t) ? t : null;
+}
+
+function inferReasonCode(event: {
+  purpose?: string | null;
+  summary?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): string {
+  const meta = event.metadata && typeof event.metadata === "object" ? event.metadata : {};
+  const fromMeta = shortCode(meta.code) ?? shortCode(meta.reasonCode) ?? shortCode(meta.reason);
+  if (fromMeta) return fromMeta;
+  const blob = `${event.purpose ?? ""} ${event.summary ?? ""}`;
+  if (/承認待ち|needs_approval/i.test(blob)) return "needs_approval";
+  if (/拒否|denied|not_authorized|authority/i.test(blob)) return "approver_not_authorized";
+  if (/競合|stale|mismatch|conflict/i.test(blob)) return "stale_base";
+  if (/無効|disabled|feature_disabled/i.test(blob)) return "feature_disabled";
+  return "approved";
+}
+
+function inferResult(code: string, event: { purpose?: string | null; summary?: string | null; result?: AdminAuditResult }): AdminAuditResult {
+  if (event.result && isResult(event.result)) return event.result;
+  const mapped = AUDIT_REASON_JA[code]?.kind;
+  if (mapped === "denied") return "denied";
+  if (mapped === "pending") return "pending";
+  if (mapped === "failure") return "error";
+  if (mapped === "success") return "success";
+  const blob = `${event.purpose ?? ""} ${event.summary ?? ""}`;
+  if (/承認待ち|needs_approval/i.test(blob)) return "pending";
+  if (/拒否|denied/i.test(blob)) return "denied";
+  if (/失敗|error|conflict|mismatch/i.test(blob)) return "error";
+  return "success";
+}
+
+function deriveTarget(event: {
+  orgId: string;
+  employeeId?: string | null;
+  target?: AdminAuditTarget;
+  metadata?: Record<string, unknown> | null;
+}): AdminAuditTarget {
+  if (isTarget(event.target)) return { type: event.target.type.trim(), id: event.target.id.trim() };
+  const meta = event.metadata && typeof event.metadata === "object" ? event.metadata : {};
+  if (isTarget(meta.target)) return { type: meta.target.type.trim(), id: meta.target.id.trim() };
+  const employeeId = typeof event.employeeId === "string" ? event.employeeId.trim() : "";
+  if (employeeId) return { type: "employee", id: employeeId };
+  const approvalId = typeof meta.approvalId === "string" ? meta.approvalId.trim() : "";
+  if (approvalId) return { type: "approval", id: approvalId };
+  return { type: "org", id: event.orgId };
+}
+
+function deriveReason(event: {
+  reason?: AdminAuditReason;
+  purpose?: string | null;
+  summary?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): AdminAuditReason {
+  if (isReason(event.reason)) {
+    return { code: event.reason.code.trim(), labelJa: event.reason.labelJa.trim().slice(0, MAX_REASON_LABEL) };
+  }
+  const meta = event.metadata && typeof event.metadata === "object" ? event.metadata : {};
+  if (isReason(meta.reason)) {
+    return { code: meta.reason.code.trim(), labelJa: meta.reason.labelJa.trim().slice(0, MAX_REASON_LABEL) };
+  }
+  return adminAuditReason(inferReasonCode(event));
+}
+
+function redactRuleMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  if (!("rule" in metadata)) return metadata;
+  const { rule, ...rest } = metadata;
+  const summary = summarizeInternalAudienceRule(rule);
+  return { ...rest, ...summary };
+}
+
+function dropUnstructuredReason(metadata: Record<string, unknown>): Record<string, unknown> {
+  if (typeof metadata.reason !== "string") return metadata;
+  const { reason: _drop, ...rest } = metadata;
+  return rest;
+}
+
+function assertAdminAuditSixField(event: {
+  orgId: string;
+  summary?: string | null;
+  metadata: Record<string, unknown>;
+}): void {
+  if (!isAdminAuditSixFieldWriteEnabledForOrg(event.orgId)) return;
+  const target = event.metadata.target;
+  if (!isTarget(target)) throw new Error("admin_audit_target_required");
+  if (target.type.length > MAX_TARGET_TYPE || target.id.length > MAX_TARGET_ID) {
+    throw new Error("admin_audit_target_too_long");
+  }
+  rejectSecretsInValue(target.type, "target.type");
+  rejectSecretsInValue(target.id, "target.id");
+  if (target.type.includes("@") || target.id.includes("@") || isEmailLike(target.id)) {
+    throw new Error("admin_audit_target_pii");
+  }
+  const reason = event.metadata.reason;
+  if (!isReason(reason)) throw new Error("admin_audit_reason_required");
+  if (reason.code.length > 64 || reason.labelJa.length > MAX_REASON_LABEL) {
+    throw new Error("admin_audit_reason_too_long");
+  }
+  if (reason.labelJa.includes("@") || isEmailLike(reason.labelJa) || reason.code.includes("@")) {
+    throw new Error("admin_audit_reason_pii");
+  }
+  rejectSecretsInValue(reason.code, "reason");
+  rejectSecretsInValue(reason.labelJa, "reason");
+  if (!isResult(event.metadata.result)) throw new Error("admin_audit_result_required");
+  if ("rule" in event.metadata) throw new Error("admin_audit_rule_text_forbidden");
 }
 
 export async function appendAdminAuditEvent(
@@ -411,13 +593,26 @@ export async function appendAdminAuditEvent(
     actorEmail?: string | null;
     metadata?: Record<string, unknown>;
     action: AuditAction;
+    target?: AdminAuditTarget;
+    reason?: AdminAuditReason;
+    result?: AdminAuditResult;
   }
 ): Promise<void> {
   const whoRequired = isAdminAuditWhoRequiredEnabledForOrg(event.orgId);
+  const sixField = isAdminAuditSixFieldWriteEnabledForOrg(event.orgId);
   const actor = normalizeAdminWhoActor(event.actor, event.orgId);
   const actorMeta = adminActorMetadata(actor);
-  const metadata = { ...(event.metadata ?? {}), ...actorMeta };
-  const actorEmail = actorEmailForWrite(event.actor, event.actorEmail, whoRequired);
+  let metadata: Record<string, unknown> = { ...(event.metadata ?? {}), ...actorMeta };
+  if (sixField) {
+    metadata = redactRuleMetadata(metadata);
+    const reason = deriveReason(event);
+    const result = inferResult(reason.code, event);
+    metadata = dropUnstructuredReason(metadata);
+    metadata.target = deriveTarget(event);
+    metadata.reason = reason;
+    metadata.result = result;
+  }
+  const actorEmail = actorEmailForWrite(actor, event.actorEmail, whoRequired);
   assertAdminAuditIdentity({
     action: event.action,
     actorEmail,
@@ -425,6 +620,9 @@ export async function appendAdminAuditEvent(
     metadata,
     orgId: event.orgId,
   });
+  if (sixField) {
+    assertAdminAuditSixField({ orgId: event.orgId, summary: event.summary, metadata });
+  }
   await appendAuditEvent({
     orgId: event.orgId,
     employeeId: event.employeeId,
@@ -434,5 +632,60 @@ export async function appendAdminAuditEvent(
     purpose: event.purpose,
     summary: event.summary,
     metadata,
+  });
+}
+
+export async function appendAdminClassAuditEvent(event: {
+  orgId: string;
+  employeeId?: string | null;
+  credentialId?: string | null;
+  actor?: AdminAuditActor;
+  actorEmail?: string | null;
+  approval?: AdminAuditApprovalRef | null;
+  systemLabel?: string;
+  legacyAction: AuditAction;
+  adminAction: AuditAction;
+  purpose: string | null;
+  summary: string;
+  metadata?: Record<string, unknown>;
+  target?: AdminAuditTarget;
+  reason?: AdminAuditReason;
+  result?: AdminAuditResult;
+}): Promise<void> {
+  if (!isAdminAuditSixFieldWriteEnabledForOrg(event.orgId)) {
+    await appendAuditEvent({
+      orgId: event.orgId,
+      employeeId: event.employeeId ?? null,
+      credentialId: event.credentialId ?? null,
+      actorEmail: event.actorEmail,
+      action: event.legacyAction,
+      purpose: event.purpose,
+      summary: event.summary,
+      metadata: event.metadata,
+    });
+    return;
+  }
+  const email = extractEmail(event.actorEmail);
+  const actor =
+    event.actor ??
+    (await resolveAdminAuditActor({
+      orgId: event.orgId,
+      approval: event.approval,
+      human: email ? { email } : undefined,
+      systemLabel: event.systemLabel ?? ADMIN_AUDIT_SYSTEM_LABEL.adminMcp,
+    }));
+  await appendAdminAuditEvent({
+    orgId: event.orgId,
+    employeeId: event.employeeId ?? null,
+    credentialId: event.credentialId ?? null,
+    actor,
+    actorEmail: event.actorEmail,
+    action: event.adminAction,
+    purpose: event.purpose,
+    summary: event.summary,
+    metadata: event.metadata,
+    target: event.target,
+    reason: event.reason,
+    result: event.result,
   });
 }

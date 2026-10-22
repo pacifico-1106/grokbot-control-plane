@@ -135,7 +135,7 @@ describe("admin audit who contract", () => {
         actorEmail: "system@example.com",
         metadata: { actorKind: "system", actorLabel: "ingress" },
       })
-    ).not.toThrow();
+    ).toThrow(/system.*email|email.*forbidden|actorEmail/i);
   });
 
   test("flag ON: real approver email is kept, never replaced with a fake address", async () => {
@@ -163,8 +163,8 @@ describe("admin audit who contract", () => {
     });
     const row = getRuntimeAudit()[0];
     expect(row.actorEmail).toBe("approver@example.com");
-    expect(row.metadata?.actorKind).toBe("system");
-    expect(String(row.metadata?.actorLabel || "").length).toBeGreaterThan(0);
+    expect(row.metadata?.actorKind).toBe("human");
+    expect(row.metadata?.actorLabel).toBeUndefined();
   });
 
   test("flag ON: other org in allowlist is not enforced (tenant isolation)", async () => {

@@ -15,6 +15,7 @@ import {
   ADMIN_AUDIT_SYSTEM_LABEL,
   adminAgentAuditActor,
   appendAdminAuditEvent,
+  adminAuditReason,
   systemAdminActor,
   type AdminAuditActor,
 } from "@/lib/audit/admin-audit";
@@ -182,6 +183,9 @@ export async function queueAdminTool(input: {
         purpose: auditActionForAdminTool(input.tool),
         summary: `管理クラス承認拒否（承認者未設定）: ${input.tool}`,
         actor: queueAdminActor(input.cred),
+        target: { type: "org", id: input.cred.orgId },
+        reason: adminAuditReason(policyCheck.code),
+        result: "denied",
         metadata: {
           tool: input.tool,
           code: policyCheck.code,
@@ -237,10 +241,13 @@ export async function queueAdminTool(input: {
       action: "admin.policy",
       purpose: auditAction,
       summary: `承認者権限により申請を停止: ${input.tool}`,
-        actor: queueAdminActor(input.cred),
-        metadata: {
-          tool: input.tool,
-          code: authorityStop.reason,
+      actor: queueAdminActor(input.cred),
+      target: { type: "org", id: input.cred.orgId },
+      reason: adminAuditReason(authorityStop.reason),
+      result: "denied",
+      metadata: {
+        tool: input.tool,
+        code: authorityStop.reason,
         requiredApproverKind: authorityStop.requiredApproverKind,
         auditClass: ADMIN_AUDIT_CLASS,
       },
@@ -299,9 +306,12 @@ export async function queueAdminTool(input: {
     action: auditAction,
     purpose: auditAction,
     summary: `承認待ち: ${title}`,
-        actor: queueAdminActor(input.cred),
-        metadata: {
-          approvalId: created.approval.id,
+    actor: queueAdminActor(input.cred),
+    target: { type: "approval", id: created.approval.id },
+    reason: adminAuditReason("needs_approval"),
+    result: "pending",
+    metadata: {
+      approvalId: created.approval.id,
       tool: input.tool,
       auditClass: ADMIN_AUDIT_CLASS,
       always_human: true,

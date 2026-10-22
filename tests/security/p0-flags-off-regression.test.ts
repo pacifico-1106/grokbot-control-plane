@@ -34,6 +34,8 @@ const {
   isSlackApprovalStrict,
   isAdminAuditWhoRequiredEnabled,
   isAdminAuditWhoRequiredEnabledForOrg,
+  isAdminAuditSixFieldWriteEnabled,
+  isAdminAuditSixFieldWriteEnabledForOrg,
 } = await import("@/lib/feature-flags");
 
 const { isRecipientRoutingEnabled } = await import("@/lib/notify/recipient-routing");
@@ -62,6 +64,11 @@ describe("FLAGS-OFF REGRESSION: Feature flags default to OFF", () => {
   test("ADMIN_AUDIT_WHO_REQUIRED_ENABLED is OFF by default", () => {
     expect(isAdminAuditWhoRequiredEnabled()).toBe(false);
     expect(isAdminAuditWhoRequiredEnabledForOrg("org_any")).toBe(false);
+  });
+
+  test("ADMIN_AUDIT_SIX_FIELD_WRITE_ENABLED is OFF by default", () => {
+    expect(isAdminAuditSixFieldWriteEnabled()).toBe(false);
+    expect(isAdminAuditSixFieldWriteEnabledForOrg("org_any")).toBe(false);
   });
 });
 
