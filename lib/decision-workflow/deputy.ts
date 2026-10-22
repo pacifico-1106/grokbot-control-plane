@@ -11,8 +11,8 @@
  * - Only active when P1_DECISION_WORKFLOW_ENABLED is ON
  */
 
+import { adminAuditReason, appendAdminClassAuditEvent } from "@/lib/audit/admin-audit";
 import { isDecisionWorkflowEnabled } from "@/lib/feature-flags";
-import { appendAuditEvent } from "@/lib/data/audit";
 import type { ApprovalRequest } from "@/lib/types";
 
 /**
@@ -94,14 +94,19 @@ export async function recordDeputyActivation(
     return;
   }
 
-  await appendAuditEvent({
+  await appendAdminClassAuditEvent({
     orgId: approval.orgId,
     employeeId: approval.employeeId,
     credentialId: approval.credentialId,
-    action: "decision.deputy_activated",
+    actorEmail,
+    approval,
+    legacyAction: "decision.deputy_activated",
+    adminAction: "admin.decision.deputy_activated",
     purpose: approval.purpose,
     summary: `決裁代理を委任: ${deputyUserId}`,
-    actorEmail,
+    target: { type: "approval", id: approval.id },
+    reason: adminAuditReason("approved"),
+    result: "success",
     metadata: {
       approvalId: approval.id,
       deputyUserId,

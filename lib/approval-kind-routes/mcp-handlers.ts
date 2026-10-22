@@ -20,7 +20,8 @@ import { getEffectiveApprovalWorkflowPolicy } from "@/lib/approval-workflow";
 import { validateApprovalRoutes, type ValidatorContext } from "./validate";
 import type { OrgApprovalKindRoutesPolicy, ApprovalKind } from "./types";
 import { APPROVAL_KINDS } from "./types";
-import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
+import { maskEmail } from "@/lib/audit/mask";
+import { isApprovalKindRoutesEnabled, isAdminAuditSixFieldWriteEnabledForOrg } from "@/lib/feature-flags";
 
 export interface ApprovalRoutesGetResult {
   ok: boolean;
@@ -338,7 +339,7 @@ export async function fulfillApprovalRoutesPatch(
   approval: import("@/lib/types").ApprovalRequest,
   args: Record<string, unknown>
 ): Promise<FulfillApprovalRoutesPatchResult> {
-  const { appendAuditEvent } = await import("@/lib/data/audit");
+  const { appendAdminClassAuditEvent, adminAuditReason } = await import("@/lib/audit/admin-audit");
   const { setOrgApprovalKindRoutesPolicy } = await import("./data");
   const { isApprovalKindRoutesEnabled } = await import("@/lib/feature-flags");
 
@@ -376,13 +377,18 @@ export async function fulfillApprovalRoutesPatch(
   // Check before-state match
   const { matches, currentState } = await checkBeforeStateMatch(approval.orgId, beforeSnapshot);
   if (!matches) {
-    await appendAuditEvent({
+    await appendAdminClassAuditEvent({
       orgId: approval.orgId,
       employeeId: null,
       credentialId: null,
-      action: "approval_routes.patch_conflict",
+      approval,
+      legacyAction: "approval_routes.patch_conflict",
+      adminAction: "admin.approvalRoutes.patch",
       purpose: "admin.policy",
       summary: "承認ルート更新が競合しました（変更前の状態が一致しません）",
+      target: { type: "org", id: approval.orgId },
+      reason: adminAuditReason("stale_base"),
+      result: "error",
       metadata: {
         approvalId: approval.id,
         expectedPolicyId: beforeSnapshot?.policyId ?? null,
@@ -424,18 +430,25 @@ export async function fulfillApprovalRoutesPatch(
   }
 
   // Write audit record
-  await appendAuditEvent({
+  await appendAdminClassAuditEvent({
     orgId: approval.orgId,
     employeeId: null,
     credentialId: null,
-    action: "approval_routes.patch",
+    approval,
+    legacyAction: "approval_routes.patch",
+    adminAction: "admin.approvalRoutes.patch",
     purpose: "admin.policy",
     summary: "承認ルート設定を更新しました（管理MCP・人承認後）",
+    target: { type: "org", id: approval.orgId },
+    reason: adminAuditReason("approved"),
+    result: "success",
     metadata: {
       approvalId: approval.id,
       policyId: (afterSnapshot as { policyId?: string }).policyId,
       filedBy: (meta.invoke as { actorId?: string })?.actorId ?? null,
-      approvedBy: approval.resolvedBy,
+      approvedBy: isAdminAuditSixFieldWriteEnabledForOrg(approval.orgId)
+        ? maskEmail(approval.resolvedBy)
+        : approval.resolvedBy,
       diff: diffSummary,
     },
   });
@@ -460,7 +473,7 @@ export async function handleDeputyActivate(
 ): Promise<DeputyActivateResult> {
   const { isDecisionWorkflowEnabled } = await import("@/lib/feature-flags");
   const { getApprovalById, createApproval } = await import("@/lib/data/approvals");
-  const { appendAuditEvent } = await import("@/lib/data/audit");
+  const { appendAdminClassAuditEvent, adminAuditReason } = await import("@/lib/audit/admin-audit");
   const { listMembers } = await import("@/lib/data/members");
   const {
     validateDeputyActivation,
@@ -544,13 +557,17 @@ export async function handleDeputyActivate(
     metadata: deputyMetadata,
   });
 
-  await appendAuditEvent({
+  await appendAdminClassAuditEvent({
     orgId: cred.orgId,
     employeeId: originalApproval.employeeId,
     credentialId: cred.actorId ?? "",
-    action: "decision.deputy_activated",
+    legacyAction: "decision.deputy_activated",
+    adminAction: "admin.decision.deputyActivate",
     purpose: "decision.deputy_activate",
     summary: `決裁代理委任を申請: ${deputyUserId}`,
+    target: { type: "approval", id: result.approval.id },
+    reason: adminAuditReason("needs_approval"),
+    result: "pending",
     metadata: {
       approvalId: result.approval.id,
       originalApprovalId: approvalId,
@@ -584,9 +601,9 @@ export async function fulfillDeputyActivate(
   approval: import("@/lib/types").ApprovalRequest,
   _args: Record<string, unknown>
 ): Promise<FulfillDeputyActivateResult> {
-  const { isDecisionWorkflowEnabled } = await import("@/lib/feature-flags");
+  const { isDecisionWorkflowEnabled, isAdminAuditSixFieldWriteEnabledForOrg } = await import("@/lib/feature-flags");
   const { getApprovalById } = await import("@/lib/data/approvals");
-  const { appendAuditEvent } = await import("@/lib/data/audit");
+  const { appendAdminClassAuditEvent, adminAuditReason } = await import("@/lib/audit/admin-audit");
   const { listMembers } = await import("@/lib/data/members");
   const {
     validateDeputyActivation,
@@ -645,19 +662,27 @@ export async function fulfillDeputyActivate(
   );
 
   if (!validation.ok) {
-    await appendAuditEvent({
+    const sixField = isAdminAuditSixFieldWriteEnabledForOrg(approval.orgId);
+    await appendAdminClassAuditEvent({
       orgId: approval.orgId,
       employeeId: approval.employeeId,
       credentialId: approval.credentialId,
-      action: "decision.deputy_activated",
+      approval,
+      legacyAction: "decision.deputy_activated",
+      adminAction: "admin.decision.deputy_activated",
       purpose: approval.purpose,
-      summary: `決裁代理委任が拒否されました: ${validation.message}`,
+      summary: sixField
+        ? `決裁代理委任が拒否されました（${validation.code}）`
+        : `決裁代理委任が拒否されました: ${validation.message}`,
+      target: { type: "approval", id: approval.id },
+      reason: adminAuditReason(validation.code, "決裁代理委任を拒否しました"),
+      result: "denied",
       metadata: {
         approvalId: approval.id,
         originalApprovalId,
         deputyUserId,
         rejectionCode: validation.code,
-        rejectionMessage: validation.message,
+        ...(sixField ? {} : { rejectionMessage: validation.message }),
       },
     });
 

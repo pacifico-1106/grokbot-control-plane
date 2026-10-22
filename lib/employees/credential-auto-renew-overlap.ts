@@ -6,7 +6,8 @@
  */
 import { randomBytes } from "node:crypto";
 import { mintOneTimeSecret } from "@/lib/bindings";
-import { appendAuditEvent } from "@/lib/data/audit";
+import { adminAuditReason, appendAdminClassAuditEvent } from "@/lib/audit/admin-audit";
+import type { AuditAction } from "@/lib/types";
 import { getApprovalById } from "@/lib/data";
 import { getBinding } from "@/lib/data/bindings";
 import {
@@ -55,20 +56,45 @@ function claimToken(): string {
   return randomBytes(24).toString("hex");
 }
 
+async function writeRenewAudit(input: {
+  orgId: string;
+  employeeId?: string | null;
+  credentialId?: string | null;
+  legacy: "credential.renew_claim_denied" | "credential.renew_claimed" | "credential.renew_old_revoked";
+  summary: string;
+  result: "success" | "denied" | "error";
+  reasonCode: string;
+  metadata: Record<string, unknown>;
+}): Promise<void> {
+  await appendAdminClassAuditEvent({
+    orgId: input.orgId,
+    employeeId: input.employeeId ?? null,
+    credentialId: input.credentialId ?? null,
+    legacyAction: input.legacy,
+    adminAction: `admin.${input.legacy}` as AuditAction,
+    purpose: "admin.policy",
+    summary: input.summary,
+    target: input.employeeId ? { type: "employee", id: input.employeeId } : { type: "org", id: input.orgId },
+    reason: adminAuditReason(input.reasonCode),
+    result: input.result,
+    metadata: input.metadata,
+  }).catch(() => undefined);
+}
+
 async function auditDenied(input: {
   orgId: string;
   employeeId?: string;
   code: string;
 }): Promise<void> {
-  await appendAuditEvent({
+  await writeRenewAudit({
     orgId: input.orgId,
     employeeId: input.employeeId ?? null,
-    credentialId: null,
-    action: "credential.renew_claim_denied",
-    purpose: "admin.policy",
+    legacy: "credential.renew_claim_denied",
     summary: `社員証の更新の受け取りを拒否（${input.code}）`,
+    result: "denied",
+    reasonCode: input.code,
     metadata: { code: input.code, employeeId: input.employeeId ?? null },
-  }).catch(() => undefined);
+  });
 }
 
 export async function issueCredentialOverlap(input: {
@@ -180,13 +206,14 @@ export async function issueCredentialOverlap(input: {
       allowedAccounts: gated.employee.allowedAccounts,
     });
     if (!minted) throw new Error("overlap_attach_failed");
-    await appendAuditEvent({
+    await writeRenewAudit({
       orgId: input.orgId,
       employeeId: gated.employee.id,
       credentialId: minted.newCredentialId,
-      action: "credential.renew_claimed",
-      purpose: "admin.policy",
+      legacy: "credential.renew_claimed",
       summary: "社員証の更新を受け取り（重ね置き）",
+      result: "success",
+      reasonCode: "approved",
       metadata: {
         generation: minted.generation,
         newCredentialId: minted.newCredentialId,
@@ -195,7 +222,7 @@ export async function issueCredentialOverlap(input: {
         secretHashPrefix: secret.fingerprint.slice(0, 12),
         overlapUntil,
       },
-    }).catch(() => undefined);
+    });
     return {
       ok: true,
       newCredentialId: minted.newCredentialId,
@@ -264,20 +291,21 @@ export async function completeCredentialOverlapOnFirstAuth(input: {
     return false;
   }
   if (!switched) return false;
-  await appendAuditEvent({
+  await writeRenewAudit({
     orgId: input.orgId,
     employeeId: input.employeeId,
     credentialId: overlap.newCredentialId,
-    action: "credential.renew_old_revoked",
-    purpose: "admin.policy",
+    legacy: "credential.renew_old_revoked",
     summary: "更新前の社員証を失効（初回認証）",
+    result: "success",
+    reasonCode: "approved",
     metadata: {
       reason: "first_auth",
       oldCredentialId: overlap.oldCredentialId,
       newCredentialId: overlap.newCredentialId,
       renewalId: overlap.id,
     },
-  }).catch(() => undefined);
+  });
   return true;
 }
 
@@ -309,13 +337,14 @@ export async function expireOverlappedOldCredentials(now?: Date): Promise<{
     }
     if (outcome === "expired") continue;
     if (outcome === "unused_new_revoked") {
-      await appendAuditEvent({
+      await writeRenewAudit({
         orgId: row.orgId,
         employeeId: row.employeeId,
         credentialId: row.newCredentialId,
-        action: "credential.renew_claim_denied",
-        purpose: "admin.policy",
+        legacy: "credential.renew_claim_denied",
         summary: "未使用の新社員証を失効（重ね置き期限）",
+        result: "denied",
+        reasonCode: "unused_after_overlap",
         metadata: {
           code: "unused_after_overlap",
           reason: "unused_after_overlap",
@@ -323,18 +352,19 @@ export async function expireOverlappedOldCredentials(now?: Date): Promise<{
           newCredentialId: row.newCredentialId,
           renewalId: row.id,
         },
-      }).catch(() => undefined);
+      });
       continue;
     }
     if (outcome !== "switched") {
       failed += 1;
-      await appendAuditEvent({
+      await writeRenewAudit({
         orgId: row.orgId,
         employeeId: row.employeeId,
         credentialId: row.newCredentialId,
-        action: "credential.renew_claim_denied",
-        purpose: "admin.policy",
+        legacy: "credential.renew_claim_denied",
         summary: "重ね置き期限後の旧社員証失効に失敗",
+        result: "error",
+        reasonCode: "revoke_failed",
         metadata: {
           code: "revoke_failed",
           reason: "overlap_timeout",
@@ -342,23 +372,24 @@ export async function expireOverlappedOldCredentials(now?: Date): Promise<{
           newCredentialId: row.newCredentialId,
           renewalId: row.id,
         },
-      }).catch(() => undefined);
+      });
       continue;
     }
-    await appendAuditEvent({
+    await writeRenewAudit({
       orgId: row.orgId,
       employeeId: row.employeeId,
       credentialId: row.newCredentialId,
-      action: "credential.renew_old_revoked",
-      purpose: "admin.policy",
+      legacy: "credential.renew_old_revoked",
       summary: "更新前の社員証を失効（重ね置き期限）",
+      result: "success",
+      reasonCode: "approved",
       metadata: {
         reason: "overlap_timeout",
         oldCredentialId: row.oldCredentialId,
         newCredentialId: row.newCredentialId,
         renewalId: row.id,
       },
-    }).catch(() => undefined);
+    });
     revoked += 1;
   }
   return { orgs: seen.size, revoked, failed };

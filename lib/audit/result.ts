@@ -45,6 +45,8 @@ export const AUDIT_REASON_JA: Record<string, { kind: AuditResultKind; ja: string
   admin_policy_required: { kind: "denied", ja: "管理操作の承認者が未設定です" },
   approver_is_requester: { kind: "denied", ja: "申請者本人は承認できません" },
   approver_not_authorized: { kind: "denied", ja: "この操作を承認できる人ではありません" },
+  owner_approval_required: { kind: "denied", ja: "オーナーの承認が必要です" },
+  approver_member_required: { kind: "denied", ja: "保存した人の所属が確認できません" },
   approver_identity_unverified: { kind: "denied", ja: "承認者の本人確認ができません" },
   no_approver_resolvable: { kind: "denied", ja: "届け先の承認者が見つかりません" },
   project_access: { kind: "denied", ja: "担当プロジェクトの外の情報は扱えません" },

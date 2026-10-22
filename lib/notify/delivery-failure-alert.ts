@@ -22,7 +22,7 @@
 // hot paths importing this file (notify/channels, Slack interactivity) do not
 // pick up new module edges when the flag is OFF.
 import type { sendTransactionalEmail } from "@/lib/resend";
-import { adminActorMetadata, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { adminActorMetadata, adminAuditReason, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import type { AuditEvent } from "@/lib/types";
 
 function parseFlag(value: string | undefined): boolean {
@@ -160,7 +160,13 @@ export async function alertApprovalDeliveryFailure(input: {
         await writerOverride(row);
         return;
       }
-      await appendAdminAuditEvent({ ...row, actor });
+      await appendAdminAuditEvent({
+        ...row,
+        actor,
+        target: { type: "org", id: event.orgId },
+        reason: adminAuditReason(typeof event.metadata.reason === "string" ? event.metadata.reason : "rejected"),
+        result: "denied",
+      });
     };
     await write({
       orgId,

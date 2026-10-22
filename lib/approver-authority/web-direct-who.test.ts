@@ -8,19 +8,22 @@ import type { OrgMember } from "@/lib/types";
 
 const WHO = "ADMIN_AUDIT_WHO_REQUIRED_ENABLED";
 const WHO_ORGS = "ADMIN_AUDIT_WHO_REQUIRED_ORG_IDS";
+const SIX = "ADMIN_AUDIT_SIX_FIELD_WRITE_ENABLED";
 const AUTH = "APPROVER_AUTHORITY_ENABLED";
 const ORG = DEMO_ORG.id;
 const ADMIN = "mem_wd_who_admin";
 const OTHER = "mem_wd_other_org";
 const caps = ["view_dashboard", "view_employees", "hire_issue_credentials", "manage_team"] as OrgMember["capabilities"];
-const saved: { who?: string; orgs?: string; auth?: string } = {};
+const saved: { who?: string; orgs?: string; auth?: string; six?: string } = {};
 
 beforeEach(async () => {
   saved.who = process.env[WHO];
   saved.orgs = process.env[WHO_ORGS];
   saved.auth = process.env[AUTH];
+  saved.six = process.env[SIX];
   delete process.env[WHO];
   delete process.env[WHO_ORGS];
+  delete process.env[SIX];
   process.env[AUTH] = "true";
   resetRuntimeMembers();
   upsertRuntimeMember(
@@ -56,6 +59,8 @@ afterEach(() => {
   else process.env[WHO_ORGS] = saved.orgs;
   if (saved.auth === undefined) delete process.env[AUTH];
   else process.env[AUTH] = saved.auth;
+  if (saved.six === undefined) delete process.env[SIX];
+  else process.env[SIX] = saved.six;
   resetRuntimeMembers();
 });
 
@@ -129,5 +134,44 @@ describe("web-direct denial who", () => {
     expect(row!.metadata?.actorKind).toBe("system");
     expect(String(row!.metadata?.actorLabel || "").trim().length).toBeGreaterThan(0);
     expect(String(row!.metadata?.actorLabel)).not.toMatch(/@/);
+  });
+
+  test("L1: passed actorEmail must match the same-org session member or fail closed", async () => {
+    process.env[WHO] = "true";
+    const { assertWebActorApproverAuthority } = await import("@/lib/approver-authority/web-direct");
+    const r = await assertWebActorApproverAuthority({
+      orgId: ORG,
+      memberId: ADMIN,
+      actorEmail: "forged@evil.example",
+      changes: [{ tool: "setup.slackApprover.set", adminMutation: {} }],
+      surface: "settings.notification_channels",
+    });
+    expect(r.ok).toBe(false);
+    const row = latestDenial();
+    expect(row).toBeTruthy();
+    expect(row!.actorEmail).not.toBe("forged@evil.example");
+    expect(row!.metadata?.actorKind).toBe("system");
+    expect(String(row!.metadata?.actorLabel || "").trim().length).toBeGreaterThan(0);
+    expect(JSON.stringify(row!.metadata)).not.toMatch(/forged@evil\.example/);
+  });
+
+  test("six-field ON: denial writes target / reason / result=denied", async () => {
+    process.env[WHO] = "true";
+    process.env[SIX] = "true";
+    const { assertWebActorApproverAuthority } = await import("@/lib/approver-authority/web-direct");
+    const r = await assertWebActorApproverAuthority({
+      orgId: ORG,
+      memberId: ADMIN,
+      actorEmail: "wd-admin@fixture.invalid",
+      changes: [{ tool: "setup.slackApprover.set", adminMutation: {} }],
+      surface: "settings.notification_channels",
+    });
+    expect(r.ok).toBe(false);
+    const row = latestDenial();
+    expect(row!.metadata?.target).toEqual({ type: "org", id: ORG });
+    const reason = row!.metadata?.reason as { code?: string; labelJa?: string };
+    expect(reason.code).toBeTruthy();
+    expect(reason.labelJa).toMatch(/[\u3040-\u30ff\u4e00-\u9faf]/);
+    expect(row!.metadata?.result).toBe("denied");
   });
 });

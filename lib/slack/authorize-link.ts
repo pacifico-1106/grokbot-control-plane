@@ -37,7 +37,7 @@
  * user, bot) never appear in results, audit metadata or logs.
  */
 import { recordSetupToolSucceeded } from "@/lib/approvals/attachment-retry-cap";
-import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { adminAuditReason, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { createHash, randomBytes } from "node:crypto";
 import { getAppOrigin } from "@/lib/approvals/tokens";
 import { getEmployee } from "@/lib/data/employees";
@@ -290,6 +290,9 @@ export async function issueSlackAuthorizeLink(input: {
       action: "admin.link",
       purpose: "admin.link",
       summary: `Slack 再認可リンクの発行を中止（${result.code}）`,
+      target: { type: "org", id: orgId },
+      reason: adminAuditReason(result.code),
+      result: "denied",
       metadata: { auditClass: "admin", event: "slack_authorize_link.issue_failed", approvalId: input.approvalId, code: result.code },
     }).catch(() => undefined);
     return result;
@@ -436,6 +439,9 @@ export async function issueSlackAuthorizeLink(input: {
     credentialId: null,
     action: "admin.link",
     purpose: "admin.link",
+    target: { type: "employee", id: employee.id },
+    reason: adminAuditReason("approved"),
+    result: "success",
     summary:
       `Slack 再認可リンクを発行し、承認アプリの DM で${target === "employee" ? "社員本人" : "承認者"} ${recipient.userId} に送信` +
       `${fallbackReason ? `（社員本人に送れないため承認者へ: ${fallbackReason}）` : ""}（24時間・1回限り・` +
