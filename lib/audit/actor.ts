@@ -1,4 +1,5 @@
 import { actorLabel } from "@/lib/employees/actor-label";
+import { isAuditPageAdminWhoEnabledForOrg } from "@/lib/feature-flags";
 import type { AuditEvent } from "@/lib/types";
 import { extractEmail, maskEmail, opaqueAuditId, sanitizeAuditDisplayText } from "./mask";
 import type { AuditActorView, AuditMemberLookup, AuditPresentationLookups } from "./types";
@@ -153,6 +154,35 @@ function resolveHoldTrailActor(
   return humanHoldActor(event, key, lookups);
 }
 
+function systemActor(): AuditActorView {
+  return { kind: "system", name: "システム", emailMasked: null, employeeId: null };
+}
+
+function humanFromEmail(event: AuditEvent, lookups: AuditPresentationLookups): AuditActorView {
+  const stored = metaActorEmail(event);
+  if (!stored) return { kind: "human", name: "不明", emailMasked: null, employeeId: null };
+  const person = presentNamedPerson(stored, lookups);
+  return {
+    kind: "human",
+    name: person.name ? sanitizeAuditDisplayText(person.name) || "不明" : "不明",
+    emailMasked: person.emailMasked,
+    employeeId: null,
+  };
+}
+
+function resolveAdminPageActor(
+  event: AuditEvent,
+  lookups: AuditPresentationLookups
+): AuditActorView | null {
+  if (!isAuditPageAdminWhoEnabledForOrg(event.orgId)) return null;
+  if (!event.action.startsWith("admin.")) return null;
+  const meta = holdMeta(event);
+  const actorKind = asString(meta.actorKind);
+  if (actorKind === "system") return systemActor();
+  if (metaActorEmail(event) || actorKind === "human") return humanFromEmail(event, lookups);
+  return systemActor();
+}
+
 export function resolveAuditActor(
   event: AuditEvent,
   lookups: AuditPresentationLookups = {}
@@ -160,6 +190,9 @@ export function resolveAuditActor(
   if (HOLD_TRAIL_ACTIONS.has(event.action)) {
     return resolveHoldTrailActor(event, lookups);
   }
+
+  const adminWho = resolveAdminPageActor(event, lookups);
+  if (adminWho) return adminWho;
 
   const employeeId = event.employeeId ? String(event.employeeId).trim() : "";
   if (employeeId) {

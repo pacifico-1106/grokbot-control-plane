@@ -194,7 +194,8 @@ describe("/app/audit readability", () => {
     expect(out).not.toContain("statusToken");
     expect(out).not.toContain("<pre");
     expect(out).not.toMatch(/\{[\s\S]*"tool":\s*"comm.reply"/);
-    expect(out).toContain("AI · 営業AI社員");
+    expect(out).toContain(">AI</");
+    expect(out).toContain("営業AI社員");
     expect(out).not.toContain("佐藤 花子");
   });
 
@@ -211,10 +212,11 @@ describe("/app/audit readability", () => {
         member: member(["view_dashboard", "view_audit"]),
       };
       const out = await html();
-      expect(out).toContain("人 · 佐藤 花子");
+      expect(out).toContain("佐藤 花子");
       expect(out).toContain("r***@example.com");
-      expect(out).toContain("AI · 営業AI社員");
-      expect(out).toContain("人 · 山田 太郎");
+      expect(out).toContain(">AI</");
+      expect(out).toContain("営業AI社員");
+      expect(out).toContain("山田 太郎");
       expect(out).toContain("緊急停止を開始");
       expect(out).not.toContain("reviewer@example.com");
     } finally {

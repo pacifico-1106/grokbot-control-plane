@@ -6,7 +6,6 @@
  * / system paths write actorKind=system + actorLabel. Never fabricate an email.
  * Never persist secrets, full hashes, or full secret prefixes.
  */
-import { createHash } from "node:crypto";
 import { parseAdminRequester } from "@/lib/admin-mcp/self-approval";
 import { extractEmail, isEmailLike } from "@/lib/audit/mask";
 import { AUDIT_REASON_JA } from "@/lib/audit/result";
@@ -439,19 +438,12 @@ export function adminSixFieldAction<T extends string, U extends AuditAction>(
 }
 
 export function summarizeInternalAudienceRule(rule: unknown): {
-  ruleHashPrefix: string;
   ruleSummary: { domainCount: number; teamCount: number; autoSlackTeamInternal: boolean };
 } {
   const obj = rule && typeof rule === "object" ? (rule as Record<string, unknown>) : {};
   const domains = Array.isArray(obj.emailDomains) ? obj.emailDomains.map(String) : [];
   const teams = Array.isArray(obj.slackTeamIds) ? obj.slackTeamIds.map(String) : [];
-  const canonical = JSON.stringify({
-    emailDomains: [...domains].sort(),
-    slackTeamIds: [...teams].sort(),
-    autoSlackTeamInternal: obj.autoSlackTeamInternal === true,
-  });
   return {
-    ruleHashPrefix: createHash("sha256").update(canonical).digest("hex").slice(0, 12),
     ruleSummary: {
       domainCount: domains.length,
       teamCount: teams.length,
