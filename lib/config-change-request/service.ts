@@ -196,7 +196,6 @@ export type PendingConfigChange = {
       needs_approval: true;
       applied: false;
       approvalId: string;
-      statusToken: string;
       pollHint: "continue_polling";
       title: string;
       summary: string;
@@ -568,7 +567,6 @@ export async function createConfigChangeRequest(
     needs_approval: true,
     applied: false,
     approvalId: created.approval.id,
-    statusToken: created.statusToken,
     pollHint: "continue_polling",
     title: created.approval.title,
     summary,

@@ -52,7 +52,7 @@ async function queue(fileAttachment?: FileAttachment, tool = "comm.reply") {
   const r = await runGatewayInvoke({ employeeId: "emp_comm", credentialId: "cred_comm", body });
   expect(r.httpStatus).toBe(402);
   const approval = (await getApprovalById(String(r.body.approvalId), DEMO_ORG.id))!;
-  return { approval, statusToken: String(r.body.statusToken) };
+  return { approval, statusToken: approval.statusToken };
 }
 
 function channel(provider: "slack" | "line"): NotificationChannelRuntime {

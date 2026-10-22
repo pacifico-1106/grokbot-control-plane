@@ -705,7 +705,7 @@ describe("Gateway audience egress", () => {
     expect(revised?.status).toBe("revision_requested");
     const polled = await getApprovalStatusByToken(
       firstId,
-      String(first.body.statusToken || "")
+      String((await getApprovalById(firstId, DEMO_ORG.id))?.statusToken || "")
     );
     expect(polled?.status).toBe("revision_requested");
     const second = await runGatewayInvoke({

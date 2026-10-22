@@ -186,6 +186,7 @@ describe("plan-scopes", () => {
           tool.endsWith(".inspect") ||
           tool.includes("Status") ||
           tool.includes("Bindings") ||
+          tool.includes("Health") ||
           tool.startsWith("setup.connect");
         expect(isReadOnly).toBe(true);
       });
