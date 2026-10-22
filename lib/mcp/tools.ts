@@ -619,7 +619,7 @@ export async function callStaffpassMcpTool(
       }
       return toolResult(
         await attachTenantSettingsHealth(
-          orgId,
+          cred.orgId,
           buildStaffpassWhoamiPayload({
             employee,
             orgId,
@@ -629,7 +629,8 @@ export async function callStaffpassMcpTool(
             defaultProjectId: projects.find((item) => item.isDefault)?.id,
             configChange,
             credentialInfo,
-          })
+          }),
+          "employee"
         )
       );
     }

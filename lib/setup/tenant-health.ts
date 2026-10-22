@@ -5,7 +5,10 @@
  */
 import { getOrgAdminAgent } from "@/lib/data/admin-agents";
 import { listOrgParties } from "@/lib/data/directory";
-import { getOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
+import {
+  readOrgInternalAudienceRule,
+  type InternalAudienceRuleRead,
+} from "@/lib/data/internal-audience-rule";
 import { getEffectiveMailPolicy, type MailPolicySource } from "@/lib/data/mail-policy";
 import { listNotificationChannels } from "@/lib/data/notification-channels";
 import { getGatewayStatusForOrg } from "@/lib/data/org-context";
@@ -14,9 +17,9 @@ import { getEffectiveSchedulingPolicy, type SchedulingPolicySource } from "@/lib
 import { checkSetupApproverBindingStatus } from "@/lib/approval-workflow/voter-binding";
 import { isTenantSettingsHealthEnabledForOrg } from "@/lib/feature-flags";
 import { isDefaultMailPolicy } from "@/lib/mail-policy/validate";
-import type { AdminAgentStatus, GatewayLinkStatus, OrgInternalAudienceRule, OrgMailPolicy } from "@/lib/types";
+import type { AdminAgentStatus, GatewayLinkStatus, OrgMailPolicy } from "@/lib/types";
 
-export type TenantSettingHealthStatus = "ok" | "missing" | "degraded";
+export type TenantSettingHealthStatus = "ok" | "missing" | "degraded" | "unavailable";
 export type TenantSettingHealthEffect = "blocks" | "draft_only" | "silent_default";
 export type TenantSettingsMailMode = "A" | "B" | "ok" | "unavailable";
 
@@ -59,8 +62,15 @@ export type TenantSettingsHealthFailure = {
   code: "tenant_settings_health_unavailable" | "org_required";
 };
 
+export type EmployeeTenantSettingsHealth = {
+  ok: true;
+  readOnly: true;
+  mailMode: TenantSettingsMailMode;
+  nextStepJa: string;
+};
+
 export type TenantHealthStores = {
-  getInternalAudienceRule: (orgId: string) => Promise<OrgInternalAudienceRule>;
+  getInternalAudienceRule: (orgId: string) => Promise<InternalAudienceRuleRead>;
   getEffectiveMailPolicy: (orgId: string) => Promise<{
     policy: OrgMailPolicy;
     source: MailPolicySource;
@@ -116,9 +126,33 @@ function nextStepJa(mailMode: TenantSettingsMailMode, settings: TenantSettingHea
   return "必須のテナント設定は揃っています。";
 }
 
+function employeeNextStepJa(mailMode: TenantSettingsMailMode): string {
+  if (mailMode === "unavailable") {
+    return "設定を確認できませんでした。管理者に確認してください。";
+  }
+  if (mailMode === "A") {
+    return "社内メールは下書きになります。管理者に社内ドメインの設定を依頼してください。";
+  }
+  if (mailMode === "B") {
+    return "社内送信のルールがありません。管理者に設定を依頼してください。";
+  }
+  return "テナント設定は揃っています。詳細は管理者に確認してください。";
+}
+
+export function toEmployeeTenantSettingsHealth(
+  full: TenantSettingsHealth
+): EmployeeTenantSettingsHealth {
+  return {
+    ok: true,
+    readOnly: true,
+    mailMode: full.mailMode,
+    nextStepJa: employeeNextStepJa(full.mailMode),
+  };
+}
+
 export const defaultTenantHealthStores: TenantHealthStores = {
   async getInternalAudienceRule(orgId) {
-    return getOrgInternalAudienceRule(orgId);
+    return readOrgInternalAudienceRule(orgId);
   },
   async getEffectiveMailPolicy(orgId) {
     return getEffectiveMailPolicy(orgId);
@@ -161,7 +195,7 @@ async function readOrNull<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T
 }
 
 function unavailable(id: TenantSettingHealthItem["id"]): TenantSettingHealthItem {
-  return { id, status: "degraded", effect: "blocks" };
+  return { id, status: "unavailable", effect: "blocks" };
 }
 
 export async function buildTenantSettingsHealth(
@@ -178,13 +212,15 @@ export async function buildTenantSettingsHealth(
   const gateway = await readOrNull(() => stores.getGatewayStatus(orgId));
   const adminAgent = await readOrNull(() => stores.getAdminAgentStatus(orgId));
 
-  const iarDomains = iar.ok ? uniqueDomains(iar.value.emailDomains) : [];
+  const iarRule = iar.ok && iar.value.status === "ok" ? iar.value.rule : null;
+  const iarUnavailable = !iar.ok || iar.value.status === "unavailable";
+  const iarDomains = iarRule ? uniqueDomains(iarRule.emailDomains) : [];
   const partyDomains = parties.ok
     ? uniqueDomains(parties.value.map((row) => row.domain))
     : [];
 
   let internalDomains: TenantSettingHealthItem;
-  if (!iar.ok || !parties.ok) {
+  if (iarUnavailable || !parties.ok) {
     internalDomains = unavailable("internal_domains");
   } else if (iarDomains.length > 0) {
     internalDomains = {
@@ -336,7 +372,7 @@ export async function buildTenantSettingsHealth(
   ];
 
   let mailMode: TenantSettingsMailMode = "ok";
-  if (!iar.ok || !mail.ok) mailMode = "unavailable";
+  if (iarUnavailable || !mail.ok) mailMode = "unavailable";
   else if (iarDomains.length === 0) mailMode = "A";
   else if (!hasInternalCoveringRule(mail.value.policy)) mailMode = "B";
 
@@ -352,14 +388,38 @@ export async function buildTenantSettingsHealth(
 
 export async function attachTenantSettingsHealth<T extends Record<string, unknown>>(
   orgId: string | null | undefined,
-  payload: T
-): Promise<T & { tenantSettingsHealth?: TenantSettingsHealth | TenantSettingsHealthFailure }> {
+  payload: T,
+  audience: "employee" | "admin" = "employee"
+): Promise<
+  T & {
+    tenantSettingsHealth?:
+      | TenantSettingsHealth
+      | EmployeeTenantSettingsHealth
+      | TenantSettingsHealthFailure;
+  }
+> {
   if (!isTenantSettingsHealthEnabledForOrg(orgId)) return payload;
   const id = String(orgId ?? "").trim();
   if (!id) return payload;
   try {
-    return { ...payload, tenantSettingsHealth: await buildTenantSettingsHealth(id) };
+    const full = await buildTenantSettingsHealth(id);
+    return {
+      ...payload,
+      tenantSettingsHealth:
+        audience === "admin" ? full : toEmployeeTenantSettingsHealth(full),
+    };
   } catch {
+    if (audience === "employee") {
+      return {
+        ...payload,
+        tenantSettingsHealth: {
+          ok: true,
+          readOnly: true,
+          mailMode: "unavailable",
+          nextStepJa: employeeNextStepJa("unavailable"),
+        },
+      };
+    }
     return {
       ...payload,
       tenantSettingsHealth: { ok: false, readOnly: true, code: "tenant_settings_health_unavailable" },

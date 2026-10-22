@@ -20,12 +20,35 @@ import {
 } from "@/lib/feature-flags";
 import { callStaffpassMcpTool, listStaffpassMcpTools, STAFFPASS_MCP_TOOLS } from "@/lib/mcp/tools";
 import { callAdminMcpTool, listAdminMcpToolsForOrg } from "@/lib/mcp/admin-tools";
+import { readOrgInternalAudienceRule } from "@/lib/data/internal-audience-rule";
 import {
   attachTenantSettingsHealth,
   buildTenantSettingsHealth,
+  type EmployeeTenantSettingsHealth,
   type TenantHealthStores,
   type TenantSettingsHealth,
 } from "@/lib/setup/tenant-health";
+
+const EMPLOYEE_HINT_NEEDLES = [
+  "internalAudienceRule",
+  "mailPolicy",
+  "setup.tenantHealth",
+  "setup.lineApproval",
+  "setup.slackApprover",
+  "approvalWorkflow",
+  "parties.upsert",
+];
+const EMPLOYEE_ADMIN_FIELDS = [
+  "settings",
+  "domains",
+  "admin_agent",
+  "adminAgentStatus",
+  "activeVoterBindings",
+  "pendingVoterBindings",
+  "providers",
+  "enabledChannelCount",
+  "partyDomainCount",
+];
 
 const FLAG = "TENANT_SETTINGS_HEALTH_ENABLED";
 const ORG_IDS = "TENANT_SETTINGS_HEALTH_ORG_IDS";
@@ -108,6 +131,22 @@ function parseTool(result: { content: Array<{ text: string }>; structuredContent
 function asHealth(value: unknown): TenantSettingsHealth {
   expect(value && typeof value === "object").toBe(true);
   return value as TenantSettingsHealth;
+}
+
+function asEmployeeHealth(value: unknown): EmployeeTenantSettingsHealth {
+  expect(value && typeof value === "object").toBe(true);
+  const health = value as EmployeeTenantSettingsHealth;
+  expect(health.ok).toBe(true);
+  expect(health.readOnly).toBe(true);
+  expect(["ok", "A", "B", "unavailable"]).toContain(health.mailMode);
+  expect(typeof health.nextStepJa).toBe("string");
+  expect(health.nextStepJa.length).toBeGreaterThan(0);
+  const dumped = JSON.stringify(health);
+  for (const key of EMPLOYEE_ADMIN_FIELDS) expect(dumped).not.toContain(key);
+  for (const needle of EMPLOYEE_HINT_NEEDLES) expect(dumped).not.toContain(needle);
+  expect(Object.prototype.hasOwnProperty.call(health, "settings")).toBe(false);
+  expect(Object.prototype.hasOwnProperty.call(health, "orgId")).toBe(false);
+  return health;
 }
 
 function setting(health: TenantSettingsHealth, id: string) {
@@ -280,12 +319,15 @@ describe("buildTenantSettingsHealth (org-scoped, read-only)", () => {
         seen.push(`iar:${orgId}`);
         if (orgId !== DEMO_ORG.id) throw new Error("cross_tenant_read");
         return {
-          version: 1,
-          emailDomains: ["acme.example"],
-          slackTeamIds: [],
-          autoSlackTeamInternal: false,
-          updatedAt: "2026-10-16T00:00:00.000Z",
-          updatedBy: "test",
+          status: "ok",
+          rule: {
+            version: 1,
+            emailDomains: ["acme.example"],
+            slackTeamIds: [],
+            autoSlackTeamInternal: false,
+            updatedAt: "2026-10-16T00:00:00.000Z",
+            updatedBy: "test",
+          },
         };
       },
       getEffectiveMailPolicy: async (orgId) => {
@@ -380,9 +422,64 @@ describe("buildTenantSettingsHealth (org-scoped, read-only)", () => {
     expect(health.mailMode).toBe("unavailable");
     for (const id of SETTING_IDS) {
       const row = setting(health, id);
-      expect(row.status).toBe("degraded");
+      expect(row.status).toBe("unavailable");
       expect(row.effect).toBe("blocks");
     }
+  });
+
+  test("L1: IAR unavailable (supabase absent / read failed) is not Mode A", async () => {
+    const emptyMail = {
+      policy: defaultMailPolicy(),
+      source: "default" as const,
+      employeeOverride: null,
+      orgPolicy: null,
+    };
+    const health = await buildTenantSettingsHealth(DEMO_ORG.id, {
+      getInternalAudienceRule: async () => ({ status: "unavailable" }),
+      getEffectiveMailPolicy: async () => emptyMail,
+      getEffectiveReplyPolicy: async () => ({ source: "default" }),
+      getEffectiveSchedulingPolicy: async () => ({ source: "default" }),
+      listEmailDomainParties: async () => [],
+      listNotificationChannels: async () => [],
+      listVoterBindings: async () => ({ activeCount: 0, pendingCount: 0 }),
+      getGatewayStatus: async () => "linked",
+      getAdminAgentStatus: async () => "linked",
+    });
+    expect(health.mailMode).toBe("unavailable");
+    expect(setting(health, "internal_domains").status).toBe("unavailable");
+    expect(health.mailMode).not.toBe("A");
+  });
+
+  test("L1: readOrgInternalAudienceRule tells not-set apart from read failed", async () => {
+    const missing = await readOrgInternalAudienceRule(DEMO_ORG.id, { demo: false, admin: null });
+    expect(missing).toEqual({ status: "unavailable" });
+    const errored = await readOrgInternalAudienceRule(DEMO_ORG.id, {
+      demo: false,
+      admin: {
+        from: () => ({
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({ data: null, error: { message: "read_failed" } }),
+            }),
+          }),
+        }),
+      },
+    });
+    expect(errored).toEqual({ status: "unavailable" });
+    const unset = await readOrgInternalAudienceRule(DEMO_ORG.id, {
+      demo: false,
+      admin: {
+        from: () => ({
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({ data: { internal_audience_rule: null }, error: null }),
+            }),
+          }),
+        }),
+      },
+    });
+    expect(unset.status).toBe("ok");
+    if (unset.status === "ok") expect(unset.rule.emailDomains).toEqual([]);
   });
 
   test("does not mutate IAR or mail policy", async () => {
@@ -414,24 +511,32 @@ describe("attachTenantSettingsHealth", () => {
 });
 
 describe("flag ON: employee whoami / health", () => {
-  test("whoami and health attach the same org-scoped report", async () => {
+  test("M1: whoami and health expose only mailMode + ask-admin hint", async () => {
     process.env[FLAG] = "1";
     const whoami = parseTool(await callStaffpassMcpTool("staffpass_whoami", {}, demoEmpCred()));
     const health = parseTool(await callStaffpassMcpTool("staffpass_health", {}, demoEmpCred()));
     expect(whoami.orgId).toBe(DEMO_ORG.id);
     expect(health.orgId).toBe(DEMO_ORG.id);
-    const whoamiHealth = asHealth(whoami.tenantSettingsHealth);
-    const healthHealth = asHealth(health.tenantSettingsHealth);
-    expect(whoamiHealth.orgId).toBe(DEMO_ORG.id);
-    expect(healthHealth.orgId).toBe(DEMO_ORG.id);
+    const whoamiHealth = asEmployeeHealth(whoami.tenantSettingsHealth);
+    const healthHealth = asEmployeeHealth(health.tenantSettingsHealth);
     expect(whoamiHealth.mailMode).toBe("A");
     expect(healthHealth).toEqual(whoamiHealth);
-    expect(JSON.stringify(whoami)).not.toContain(FULL_EMAIL);
-    expect(JSON.stringify(health)).not.toContain(FULL_EMAIL);
-    for (const needle of LEAK_NEEDLES) {
-      expect(JSON.stringify(whoami)).not.toContain(needle);
-      expect(JSON.stringify(health)).not.toContain(needle);
+    expect(whoamiHealth.nextStepJa).toMatch(/管理者/);
+    const dumped = `${JSON.stringify(whoami)}\n${JSON.stringify(health)}`;
+    expect(dumped).not.toContain(FULL_EMAIL);
+    for (const needle of [...LEAK_NEEDLES, ...EMPLOYEE_HINT_NEEDLES, ...EMPLOYEE_ADMIN_FIELDS]) {
+      expect(dumped).not.toContain(needle);
     }
+  });
+
+  test("L2: missing cred.orgId omits the health block (does not fall back to employee.orgId)", async () => {
+    process.env[FLAG] = "1";
+    const parsed = parseTool(
+      await callStaffpassMcpTool("staffpass_whoami", {}, demoEmpCred({ orgId: "" }))
+    );
+    expect(parsed.ok).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(parsed, "tenantSettingsHealth")).toBe(false);
+    expect(JSON.stringify(parsed)).not.toContain("mailMode");
   });
 
   test("_ORG_IDS other tenant → caller payload unchanged", async () => {
@@ -466,21 +571,26 @@ describe("flag ON: admin setup.tenantHealth", () => {
     expect(listAdminMcpToolsForOrg(OTHER_ORG).some((t) => t.name === "setup.tenantHealth")).toBe(true);
   });
 
-  test("returns the same JSON as employee whoami and ignores args.orgId", async () => {
+  test("returns the full admin report (not the employee subset) and ignores args.orgId", async () => {
     process.env[FLAG] = "1";
-    const whoami = asHealth(
+    const whoami = asEmployeeHealth(
       parseTool(await callStaffpassMcpTool("staffpass_whoami", {}, demoEmpCred())).tenantSettingsHealth
     );
-    const admin = parseTool(
-      await callAdminMcpTool("setup.tenantHealth", { orgId: OTHER_ORG }, demoAdmCred())
+    const admin = asHealth(
+      parseTool(await callAdminMcpTool("setup.tenantHealth", { orgId: OTHER_ORG }, demoAdmCred()))
     );
     expect(admin.ok).toBe(true);
     expect(admin.readOnly).toBe(true);
     expect(admin.orgId).toBe(DEMO_ORG.id);
     expect(admin.mailMode).toBe(whoami.mailMode);
-    expect(admin.settings).toEqual(whoami.settings);
+    expect(admin.settings.map((s) => s.id)).toEqual([...SETTING_IDS]);
+    expect(setting(admin, "admin_agent").adminAgentStatus).toBe("linked");
+    expect(typeof setting(admin, "voter_bindings").activeVoterBindings).toBe("number");
+    expect(Array.isArray(setting(admin, "notification_channels").providers)).toBe(true);
+    expect(admin.nextStepJa).toMatch(/internalAudienceRule|mailPolicy|管理者/);
     expect(JSON.stringify(admin)).not.toContain(OTHER_ORG);
     expect(JSON.stringify(admin)).not.toContain(FULL_EMAIL);
+    expect(Object.prototype.hasOwnProperty.call(whoami, "settings")).toBe(false);
   });
 
   test("tool is read-only (no approvalClass, description says read-only)", () => {

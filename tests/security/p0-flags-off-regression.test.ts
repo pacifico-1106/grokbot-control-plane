@@ -34,6 +34,8 @@ const {
   isSlackApprovalStrict,
   isAdminAuditWhoRequiredEnabled,
   isAdminAuditWhoRequiredEnabledForOrg,
+  isTenantSettingsHealthEnabled,
+  isTenantSettingsHealthEnabledForOrg,
 } = await import("@/lib/feature-flags");
 
 const { isRecipientRoutingEnabled } = await import("@/lib/notify/recipient-routing");
@@ -62,6 +64,11 @@ describe("FLAGS-OFF REGRESSION: Feature flags default to OFF", () => {
   test("ADMIN_AUDIT_WHO_REQUIRED_ENABLED is OFF by default", () => {
     expect(isAdminAuditWhoRequiredEnabled()).toBe(false);
     expect(isAdminAuditWhoRequiredEnabledForOrg("org_any")).toBe(false);
+  });
+
+  test("TENANT_SETTINGS_HEALTH_ENABLED is OFF by default", () => {
+    expect(isTenantSettingsHealthEnabled()).toBe(false);
+    expect(isTenantSettingsHealthEnabledForOrg("org_any")).toBe(false);
   });
 });
 
