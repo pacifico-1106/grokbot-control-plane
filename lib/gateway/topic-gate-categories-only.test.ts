@@ -196,7 +196,7 @@ describe("HTTP route + MCP + status poll: categories only", () => {
     const r = await invoke(body(`${UNMAPPED} の件です`));
     const b = r.body as Record<string, string>;
     const res = await statusRoute.GET(
-      new Request(`https://staffpass.example/api/approvals/status?id=${encodeURIComponent(b.approvalId)}&token=${encodeURIComponent(b.statusToken)}`)
+      new Request(`https://staffpass.example/api/approvals/status?id=${encodeURIComponent(b.approvalId)}&token=${encodeURIComponent(String((await getApprovalById(b.approvalId, DEMO_ORG.id))?.statusToken))}`)
     );
     expect(res.status).toBe(200);
     expectNoKeyword(await res.json(), KEYWORDS);
@@ -209,7 +209,7 @@ describe("MCP staffpass_get_approval_status", () => {
     const b = r.body as Record<string, string>;
     const res = await callStaffpassMcpTool(
       "staffpass_get_approval_status",
-      { approvalId: b.approvalId, statusToken: b.statusToken },
+      { approvalId: b.approvalId },
       {
         employeeId: "emp_comm",
         orgId: DEMO_ORG.id,

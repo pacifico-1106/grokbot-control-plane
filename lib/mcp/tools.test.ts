@@ -527,9 +527,8 @@ describe("staffpass_get_approval_status auto-fulfill", () => {
     const queuedData = queued.structuredContent as Record<string, unknown>;
     expect(queuedData.needs_approval).toBe(true);
     const approvalId = String(queuedData.approvalId || "");
-    const statusToken = String(queuedData.statusToken || "");
     expect(approvalId).toBeTruthy();
-    expect(statusToken).toBeTruthy();
+    expect(queuedData.statusToken).toBeUndefined();
 
     const approved = await resolveApproval(
       approvalId,
@@ -542,24 +541,19 @@ describe("staffpass_get_approval_status auto-fulfill", () => {
 
     await fulfillIfApproved(approved!, "approved");
 
+    // Admin-class tickets are not visible on the employee MCP (same 404 as a miss).
     const pollResult = await callStaffpassMcpTool(
       "staffpass_get_approval_status",
-      { approvalId, statusToken },
+      { approvalId },
       demoCred()
     );
     const pollData = pollResult.structuredContent as Record<string, unknown>;
-    expect(pollData.ok).toBe(true);
-    expect(pollData.status).toBe("approved");
-    expect(pollData.pollHint).toBe("reinvoke_with_approvalId");
-    expect(pollData.fulfillment).toBeTruthy();
+    expect(pollResult.isError).toBe(true);
+    expect(pollData.ok).toBe(false);
+    expect(pollData.error).toBe("not_found_or_invalid_token");
+    expect(pollData).not.toHaveProperty("fulfillment");
+    expect(pollData).not.toHaveProperty("oneTimeSecret");
 
-    const fulfillment = pollData.fulfillment as Record<string, unknown>;
-    expect(fulfillment.fulfilled).toBe(true);
-    expect(fulfillment.orgId).toBe(TARGET_ORG_ID);
-    expect(fulfillment.oneTimeSecret).toBeUndefined();
-    expect(pollData.resultRetrieval).toEqual({ endpoint: "/api/mcp/admin", tool: "orgs.issueAdminCredential", approvalId, requiresAdminCredential: true });
-    const repeatPoll = await callStaffpassMcpTool("staffpass_get_approval_status", { approvalId, statusToken }, demoCred());
-    expect((repeatPoll.structuredContent as { fulfillment: Record<string, unknown> }).fulfillment.oneTimeSecret).toBeUndefined();
     const denied = await callAdminMcpTool("orgs.issueAdminCredential", { approvalId }, { ...adminCred, generation: adminCred.generation + 1 });
     expect(denied.isError).toBe(true);
     const result = await callAdminMcpTool("orgs.issueAdminCredential", { approvalId }, adminCred);
@@ -569,10 +563,6 @@ describe("staffpass_get_approval_status auto-fulfill", () => {
     expect(JSON.stringify(pollData).includes(String(adminResult.oneTimeSecret))).toBe(false);
     const again = await callAdminMcpTool("orgs.issueAdminCredential", { approvalId }, adminCred);
     expect((again.structuredContent as Record<string, unknown>).oneTimeSecret).toBeUndefined();
-    const consumedPoll = await callStaffpassMcpTool("staffpass_get_approval_status", { approvalId, statusToken }, demoCred());
-    expect((consumedPoll.structuredContent as Record<string, unknown>).pollHint).toBe("fulfilled");
-    expect(fulfillment.secretPrefix).toBeTruthy();
-    expect(fulfillment.nextStepJa).toBeTruthy();
   });
 
   test("returns reinvoke_with_approvalId when approved but not yet fulfilled", async () => {
@@ -586,7 +576,7 @@ describe("staffpass_get_approval_status auto-fulfill", () => {
     );
     const queuedData = queued.structuredContent as Record<string, unknown>;
     const approvalId = String(queuedData.approvalId || "");
-    const statusToken = String(queuedData.statusToken || "");
+    expect(approvalId).toBeTruthy();
 
     const approved = await resolveApproval(
       approvalId,
@@ -598,14 +588,14 @@ describe("staffpass_get_approval_status auto-fulfill", () => {
 
     const pollResult = await callStaffpassMcpTool(
       "staffpass_get_approval_status",
-      { approvalId, statusToken },
+      { approvalId },
       demoCred()
     );
     const pollData = pollResult.structuredContent as Record<string, unknown>;
-    expect(pollData.ok).toBe(true);
-    expect(pollData.status).toBe("approved");
-    expect(pollData.pollHint).toBe("reinvoke_with_approvalId");
-    expect(pollData.fulfillment).toBeUndefined();
+    expect(pollResult.isError).toBe(true);
+    expect(pollData.ok).toBe(false);
+    expect(pollData.error).toBe("not_found_or_invalid_token");
+    expect(pollData).not.toHaveProperty("fulfillment");
   });
 });
 

@@ -109,7 +109,7 @@ async function approved(surface: "slack" | "line" = "slack") {
     const invoke = approval.metadata.invoke as Record<string, unknown>;
     await updateApprovalMetadata(approval, { invoke: { ...invoke, conversation: { ...(invoke.conversation as object), surface } } });
   }
-  return { body, approvalId, statusToken: String(q.body.statusToken) };
+  return { body, approvalId, statusToken: approval.statusToken };
 }
 /** Agent re-run whose completion step times out → uncertain claim record. */
 async function uncertainApproval(surface: "slack" | "line" = "slack") {

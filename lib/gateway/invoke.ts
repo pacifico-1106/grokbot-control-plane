@@ -584,9 +584,6 @@ async function createNeedsApprovalResponse(opts: {
     : baseSummary;
 
   let approvalId: string | null = null;
-  let statusToken: string | null = null;
-  let pollUrl: string | null = null;
-  let pollPath: string | null = null;
   let demoStore: string | null = null;
   let createdApproval: Awaited<ReturnType<typeof createApproval>>["approval"] | null = null;
 
@@ -628,9 +625,6 @@ async function createNeedsApprovalResponse(opts: {
     });
     createdApproval = created.approval;
     approvalId = created.approval.id;
-    statusToken = created.statusToken;
-    pollUrl = created.pollUrl;
-    pollPath = created.approval.pollPath;
     demoStore = created.demoStore ?? null;
   } catch (e) {
     // L: Return failure when createApproval fails, not needs_approval
@@ -711,9 +705,6 @@ async function createNeedsApprovalResponse(opts: {
       message: opts.message,
       needs_approval: true,
       approvalId,
-      statusToken,
-      pollUrl,
-      pollPath,
       pollHint: "continue_polling",
       title,
       summary,
@@ -3182,9 +3173,6 @@ async function runGatewayInvokeInner(
               message: authLinkSummary,
               needs_approval: true,
               approvalId: created.approval.id,
-              statusToken: created.statusToken,
-              pollUrl: created.pollUrl,
-              pollPath: created.approval.pollPath,
               pollHint: "continue_polling",
               title: authLinkTitle,
               summary: authLinkSummary,

@@ -1494,3 +1494,36 @@ export function isAuditPageAdminWhoEnabledForOrg(
   const list = auditPageAdminWhoOrgIds();
   return list.length === 0 || list.includes(orgId);
 }
+
+/**
+ * TENANT_SETTINGS_HEALTH_ENABLED (default OFF).
+ *
+ * When ON (and org is in _ORG_IDS or the list is empty):
+ * - staffpass_whoami / staffpass_health attach tenantSettingsHealth
+ * - Admin MCP lists setup.tenantHealth (read-only)
+ *
+ * When OFF (default): whoami / health JSON and admin tools/list are
+ * unchanged. Missing orgId stays OFF (fail-closed).
+ *
+ * _ORG_IDS: comma-separated org ids. Empty / unset → every org once the
+ * master flag is ON. Non-empty → only those orgs.
+ */
+export function isTenantSettingsHealthEnabled(): boolean {
+  return parseFlag(process.env.TENANT_SETTINGS_HEALTH_ENABLED);
+}
+
+export function tenantSettingsHealthOrgIds(): string[] {
+  return (process.env.TENANT_SETTINGS_HEALTH_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isTenantSettingsHealthEnabledForOrg(
+  orgId: string | null | undefined
+): boolean {
+  if (!isTenantSettingsHealthEnabled()) return false;
+  if (!orgId) return false;
+  const list = tenantSettingsHealthOrgIds();
+  return list.length === 0 || list.includes(orgId);
+}

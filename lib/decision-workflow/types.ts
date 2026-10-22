@@ -61,8 +61,6 @@ export interface DecisionRequestResult {
   code?: string;
   message?: string;
   approvalId?: string;
-  statusToken?: string;
-  pollUrl?: string;
   pollHint?: string;
   tier?: DecisionTier;
   tierReason?: string;

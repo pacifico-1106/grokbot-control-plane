@@ -51,7 +51,7 @@ async function textPostedOnly(fileAttachment: FileAttachment | null = FILE) {
   const approval = (await resolveApproval(approvalId, "approved", "ando@example.com", DEMO_ORG.id))!;
   await updateApprovalMetadata(approval, { fulfillment: {
     ok: true, delivery: "slack", channel: "C_INTERNAL", ts: "1787911800.000123", at: new Date().toISOString() } });
-  return { approvalId, statusToken: String(q.body.statusToken) };
+  return { approvalId, statusToken: approval.statusToken };
 }
 const latest = async (id: string) => (await getApprovalById(id, DEMO_ORG.id))!;
 const sweep = async (id: string, now = LATER()) => runApprovalAttachmentReconcile([await latest(id)], { now });

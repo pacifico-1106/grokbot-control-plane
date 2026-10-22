@@ -235,7 +235,8 @@ describe("post-approval stop at slack_channel_required is reported as NOT SENT",
     }
     const approved = await resolveApproval(String(pending.body.approvalId), "approved", "slack:U_APPROVER", DEMO_ORG.id);
     expect((await fulfillIfApproved(approved as ApprovalRequest, "approved"))?.ok).toBe(true);
-    const res = await statusGET(new Request(`https://staffpass.example/api/approvals/status?id=${pending.body.approvalId}&token=${pending.body.statusToken}`));
+    const stored = await getApprovalById(String(pending.body.approvalId), DEMO_ORG.id);
+    const res = await statusGET(new Request(`https://staffpass.example/api/approvals/status?id=${pending.body.approvalId}&token=${stored?.statusToken}`));
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.pollHint).toBe("fulfilled");
     expect((body.fulfillment as Record<string, unknown>).sent).not.toBe(false);
