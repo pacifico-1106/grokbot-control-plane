@@ -1430,6 +1430,40 @@ export function isAdminAuditWhoRequiredEnabledForOrg(
 }
 
 /**
+ * ADMIN_AUDIT_SIX_FIELD_WRITE_ENABLED (default OFF).
+ *
+ * When ON (and org is in _ORG_IDS or the list is empty):
+ * - Every admin.* write persists target {type,id}, reason {code,labelJa},
+ *   and result (success | denied | error | pending) in metadata.
+ * - Reason is a short code plus a Japanese label — no secrets or PII.
+ * - Full policy/rule objects are replaced by a summary or hash prefix.
+ *
+ * When OFF (default): existing metadata is unchanged.
+ *
+ * _ORG_IDS: comma-separated org ids. Empty / unset → every org once the
+ * master flag is ON. Non-empty → only those orgs. Missing orgId stays OFF.
+ */
+export function isAdminAuditSixFieldWriteEnabled(): boolean {
+  return parseFlag(process.env.ADMIN_AUDIT_SIX_FIELD_WRITE_ENABLED);
+}
+
+export function adminAuditSixFieldWriteOrgIds(): string[] {
+  return (process.env.ADMIN_AUDIT_SIX_FIELD_WRITE_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isAdminAuditSixFieldWriteEnabledForOrg(
+  orgId: string | null | undefined
+): boolean {
+  if (!isAdminAuditSixFieldWriteEnabled()) return false;
+  if (!orgId) return false;
+  const list = adminAuditSixFieldWriteOrgIds();
+  return list.length === 0 || list.includes(orgId);
+}
+
+/**
  * TENANT_SETTINGS_HEALTH_ENABLED (default OFF).
  *
  * When ON (and org is in _ORG_IDS or the list is empty):

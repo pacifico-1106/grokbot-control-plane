@@ -30,6 +30,16 @@ export const ADMIN_AUDIT_ACTIONS = [
   "admin.portal",
   "admin.card_setup_link_mint",
   "admin.card_portal_link_mint",
+  "admin.approvalRoutes.patch",
+  "admin.decision.deputyActivate",
+  "admin.decision.deputy_activated",
+  "admin.credential.renew_proposed",
+  "admin.credential.renew_approved",
+  "admin.credential.renew_rejected",
+  "admin.credential.renew_skipped_hold",
+  "admin.credential.renew_claimed",
+  "admin.credential.renew_claim_denied",
+  "admin.credential.renew_old_revoked",
 ] as const;
 
 export type AdminAuditAction = (typeof ADMIN_AUDIT_ACTIONS)[number];

@@ -31,7 +31,7 @@
  * - Never throws to the caller (OAuth callback / approval fulfillment).
  */
 import { applyChannelClassification } from "@/lib/admin-mcp/channel-classify";
-import { adminActorMetadata, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { adminActorMetadata, adminAuditReason, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import { getOrgChannel, listOrgParties, upsertOrgChannel } from "@/lib/data/directory";
 import { getEmployee } from "@/lib/data/employees";
 import {
@@ -214,7 +214,13 @@ async function audit(input: {
     if (writerOverride) {
       await writerOverride(row);
     } else {
-      await appendAdminAuditEvent({ ...row, actor });
+      await appendAdminAuditEvent({
+        ...row,
+        actor,
+        target: { type: "org", id: input.orgId },
+        reason: adminAuditReason("approved"),
+        result: "success",
+      });
     }
   } catch (error) {
     console.error("slack_dm_autoroute_audit_failed", error instanceof Error ? error.message.slice(0, 120) : "unknown");

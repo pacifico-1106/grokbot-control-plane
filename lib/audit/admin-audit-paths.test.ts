@@ -48,11 +48,17 @@ describe("admin.* audit writes go through the shared helper", () => {
       "lib/admin-mcp/queue.ts",
       "lib/external-contract-card/queue-card-setup.ts",
       "lib/external-contract-card/queue-portal-link.ts",
+      "lib/approval-kind-routes/mcp-handlers.ts",
+      "lib/employees/credential-auto-renew.ts",
+      "lib/employees/credential-auto-renew-overlap.ts",
+      "lib/decision-workflow/deputy.ts",
     ];
     for (const rel of required) {
       const src = sources.find((s) => s.path === rel);
       expect(src).toBeTruthy();
-      expect(src!.text).toContain("appendAdminAuditEvent");
+      expect(
+        src!.text.includes("appendAdminAuditEvent") || src!.text.includes("appendAdminClassAuditEvent")
+      ).toBe(true);
     }
   });
 

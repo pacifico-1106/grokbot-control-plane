@@ -15,7 +15,7 @@
  * audit. Only the given (orgId, inbox) with the shared-app marker is touched.
  * A re-install by the same org stores a new token and re-enables the inbox.
  */
-import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { adminAuditReason, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
 import {
   isSharedApprovalAppChannelConfig,
   purgeSharedApprovalChannelSecrets,
@@ -96,6 +96,9 @@ export async function retireSharedApprovalInbox(input: {
       action: "admin.notificationChannel",
       purpose: "admin.notificationChannel",
       summary: `共通承認アプリが使えなくなったため承認口を無効にしました（${reason}）。承認依頼は届きません`,
+      target: { type: "org", id: inbox.orgId },
+      reason: adminAuditReason("rejected"),
+      result: "denied",
       metadata: { auditClass: "admin", event: "shared_approval_app.disabled", reason, source: input.source, inboxId: inbox.id, teamId },
     }).catch(() => undefined);
   }
@@ -112,6 +115,9 @@ export async function retireSharedApprovalInbox(input: {
       action: "admin.notificationChannel",
       purpose: "admin.notificationChannel",
       summary: `共通承認アプリの保存済み token を削除しました（${reason}）。再インストールで戻せます`,
+      target: { type: "org", id: inbox.orgId },
+      reason: adminAuditReason("approved"),
+      result: "success",
       metadata: {
         auditClass: "admin",
         event: "shared_approval_app.secrets_purged",

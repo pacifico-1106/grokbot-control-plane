@@ -15,6 +15,7 @@
 import { isAdminAuditWhoRequiredEnabledForOrg, isApproverAuthorityEnabled } from "@/lib/feature-flags";
 import {
   ADMIN_AUDIT_SYSTEM_LABEL,
+  adminAuditReason,
   appendAdminAuditEvent,
   humanAdminActor,
   resolveAdminAuditActor,
@@ -66,14 +67,16 @@ async function resolveWebDirectAuditActor(input: {
     return resolveAdminAuditActor({ orgId: input.orgId });
   }
   const memberId = (input.memberId || "").trim();
-  const passed = extractEmail(input.actorEmail);
-  if (passed) return humanAdminActor(passed, memberId || null);
   if (memberId) {
     const { getMemberById } = await import("@/lib/data/members");
     const member = await getMemberById(memberId, input.orgId).catch(() => null);
     if (member && member.orgId === input.orgId) {
-      const email = extractEmail(member.email);
-      if (email) return humanAdminActor(email, memberId);
+      const memberEmail = extractEmail(member.email);
+      const passed = extractEmail(input.actorEmail);
+      if (passed && memberEmail && passed.toLowerCase() !== memberEmail.toLowerCase()) {
+        return systemAdminActor(ADMIN_AUDIT_SYSTEM_LABEL.web);
+      }
+      if (memberEmail) return humanAdminActor(memberEmail, memberId);
     }
   }
   return systemAdminActor(ADMIN_AUDIT_SYSTEM_LABEL.web);
@@ -107,6 +110,9 @@ export async function assertWebActorApproverAuthority(input: {
     action: "admin.policy",
     purpose: "approver_authority.web_denied",
     summary: `承認者・権限の直接変更を拒否（${reason}）`,
+    target: { type: "org", id: input.orgId },
+    reason: adminAuditReason(reason),
+    result: "denied",
     metadata: {
       surface: input.surface ?? null,
       actorMemberId: memberId || null,
