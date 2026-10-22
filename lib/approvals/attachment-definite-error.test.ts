@@ -72,7 +72,7 @@ async function approved(fileAttachment: FileAttachment | null = FILE) {
   expect(q.httpStatus).toBe(402);
   const approvalId = String(q.body.approvalId);
   const approval = (await resolveApproval(approvalId, "approved", "ando@example.com", DEMO_ORG.id))!;
-  return { body, approvalId, approval, statusToken: String(q.body.statusToken) };
+  return { body, approvalId, approval, statusToken: approval.statusToken };
 }
 const fileUpload = (r: { body: Record<string, unknown> }) =>
   ((r.body.result || {}) as { fileUpload?: Record<string, unknown> }).fileUpload;

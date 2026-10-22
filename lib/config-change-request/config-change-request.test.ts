@@ -257,7 +257,7 @@ describe("flag ON → pending approval, nothing applied until approved", () => {
     expect(typeof whoData.configChangeRuleJa).toBe("string");
     const poll = await callStaffpassMcpTool(
       "staffpass_get_approval_status",
-      { approvalId: created.approvalId, statusToken: created.statusToken },
+      { approvalId: created.approvalId },
       demoCred(empId)
     );
     const pollData = poll.structuredContent as Record<string, unknown>;
@@ -383,7 +383,7 @@ describe("flag ON → pending approval, nothing applied until approved", () => {
 
     const poll = await callStaffpassMcpTool(
       "staffpass_get_approval_status",
-      { approvalId: created.approvalId, statusToken: created.statusToken },
+      { approvalId: created.approvalId },
       demoCred(empId)
     );
     const pollData = poll.structuredContent as Record<string, unknown>;

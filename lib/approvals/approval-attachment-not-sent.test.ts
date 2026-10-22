@@ -69,7 +69,7 @@ async function approved(fileAttachment?: FileAttachment) {
   const approvalId = String(q.body.approvalId);
   const approval = (await resolveApproval(approvalId, "approved", "ando@example.com", DEMO_ORG.id))!;
   expect(approval.status).toBe("approved");
-  return { body, approvalId, approval, statusToken: String(q.body.statusToken) };
+  return { body, approvalId, approval, statusToken: approval.statusToken };
 }
 const notSentAudits = async (approvalId: string) =>
   (await listAuditEvents(DEMO_ORG.id)).filter((e) => e.action === "approval.attachment_not_sent"

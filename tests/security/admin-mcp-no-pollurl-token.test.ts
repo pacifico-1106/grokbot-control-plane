@@ -261,14 +261,12 @@ describe("employee MCP never returns token-bearing poll URLs", () => {
     const result = await callStaffpassMcpTool(
       "staffpass_invoke",
       {
-        tool: "mail.send",
+        tool: "calendar.confirm",
         purpose: "sales.outreach",
         jobId: `job_emp_poll_${Date.now().toString(36)}`,
         payload: {
-          assetRef: "kb/public-faq",
-          to: "buyer@customer.example",
-          subject: "見積フォロー",
-          body: "先日の見積のご確認をお願いします。",
+          datetime: "2026-10-10T10:00:00+09:00",
+          counterpart: "buyer@customer.example",
         },
       },
       demoEmployeeCred("emp_sales")
