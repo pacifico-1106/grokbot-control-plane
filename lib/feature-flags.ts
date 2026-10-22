@@ -1592,3 +1592,32 @@ export function isTenantSettingsHealthEnabledForOrg(
   const list = tenantSettingsHealthOrgIds();
   return list.length === 0 || list.includes(orgId);
 }
+
+/**
+ * ADMIN_AUDIT_ACTOR_EMAIL_BACKFILL_ENABLED (default OFF).
+ *
+ * Does not start a boot-time job. Production apply is the verification
+ * SQL after 八坂 GO. Writes empty actor_email only, per listed org.
+ *
+ * Unlike display flags, empty _ORG_IDS is fail-closed (0 orgs). Missing
+ * orgId stays OFF.
+ */
+export function isAdminAuditActorEmailBackfillEnabled(): boolean {
+  return parseFlag(process.env.ADMIN_AUDIT_ACTOR_EMAIL_BACKFILL_ENABLED);
+}
+
+export function adminAuditActorEmailBackfillOrgIds(): string[] {
+  return (process.env.ADMIN_AUDIT_ACTOR_EMAIL_BACKFILL_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isAdminAuditActorEmailBackfillEnabledForOrg(
+  orgId: string | null | undefined
+): boolean {
+  if (!isAdminAuditActorEmailBackfillEnabled()) return false;
+  if (!orgId) return false;
+  const list = adminAuditActorEmailBackfillOrgIds();
+  return list.includes(orgId);
+}
