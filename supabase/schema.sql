@@ -436,6 +436,8 @@ create table if not exists audit_events (
 
 create index if not exists audit_events_org_created_idx
   on audit_events (org_id, created_at desc);
+create index if not exists audit_events_org_action_created_idx
+  on audit_events (org_id, action, created_at desc);
 
 -- ---------------------------------------------------------------------------
 -- Subscriptions (Stripe)

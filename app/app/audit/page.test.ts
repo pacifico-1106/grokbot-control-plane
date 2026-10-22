@@ -130,6 +130,14 @@ mock.module("@/lib/data", () => ({
     listCalls.push(orgId);
     return dirtyEvents.filter((e) => e.orgId === orgId);
   },
+  queryAuditPageEvents: async (
+    orgId?: string | null,
+    input?: { action?: string; from?: string; to?: string; result?: string; cursor?: string }
+  ) => {
+    listCalls.push(orgId);
+    const { applyAuditPageQuery, parseAuditPageSearch } = await import("@/lib/audit/page-query");
+    return applyAuditPageQuery(dirtyEvents, orgId, parseAuditPageSearch(input ?? {}));
+  },
   listEmployees: async (orgId?: string | null) =>
     orgId === ORG ? [{ id: "emp_sales", displayName: "営業AI社員", orgId: ORG }] : [],
   listMembers: async (orgId?: string | null) =>
