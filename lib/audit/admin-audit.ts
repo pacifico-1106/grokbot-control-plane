@@ -553,7 +553,8 @@ function redactRuleMetadata(metadata: Record<string, unknown>): Record<string, u
 
 function dropUnstructuredReason(metadata: Record<string, unknown>): Record<string, unknown> {
   if (typeof metadata.reason !== "string") return metadata;
-  const { reason: _drop, ...rest } = metadata;
+  const rest = { ...metadata };
+  delete rest.reason;
   return rest;
 }
 
@@ -661,7 +662,7 @@ export async function appendAdminClassAuditEvent(event: {
       action: event.legacyAction,
       purpose: event.purpose,
       summary: event.summary,
-      metadata: event.metadata,
+      metadata: event.metadata ?? {},
     });
     return;
   }
