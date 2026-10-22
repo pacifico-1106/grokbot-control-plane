@@ -1496,6 +1496,38 @@ export function isAuditPageAdminWhoEnabledForOrg(
 }
 
 /**
+ * AUDIT_PAGE_SIX_FIELD_ENABLED (default OFF).
+ *
+ * When ON (and org is in _ORG_IDS or the list is empty):
+ * - /app/audit shows stored metadata.target / reason / result instead of
+ *   the target placeholder "—".
+ *
+ * When OFF (default): today's placeholder. Missing orgId stays OFF.
+ *
+ * _ORG_IDS: comma-separated org ids. Empty / unset → every org once the
+ * master flag is ON. Non-empty → only those orgs.
+ */
+export function isAuditPageSixFieldEnabled(): boolean {
+  return parseFlag(process.env.AUDIT_PAGE_SIX_FIELD_ENABLED);
+}
+
+export function auditPageSixFieldOrgIds(): string[] {
+  return (process.env.AUDIT_PAGE_SIX_FIELD_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isAuditPageSixFieldEnabledForOrg(
+  orgId: string | null | undefined
+): boolean {
+  if (!isAuditPageSixFieldEnabled()) return false;
+  if (!orgId) return false;
+  const list = auditPageSixFieldOrgIds();
+  return list.length === 0 || list.includes(orgId);
+}
+
+/**
  * TENANT_SETTINGS_HEALTH_ENABLED (default OFF).
  *
  * When ON (and org is in _ORG_IDS or the list is empty):

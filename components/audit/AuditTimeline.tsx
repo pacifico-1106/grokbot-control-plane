@@ -94,6 +94,9 @@ export function AuditTimeline({ rows }: { rows: AuditRowView[] }) {
                   ) : null}
                 </p>
                 <p className="mt-3 text-sm leading-relaxed break-words">{row.summary}</p>
+                {row.target.kind !== "none" && row.target.labelJa !== "—" ? (
+                  <p className="mt-2 text-xs faint">対象 {row.target.labelJa}</p>
+                ) : null}
                 {row.result.reasonJa ? (
                   <p className="mt-2 text-xs muted">{row.result.reasonJa}</p>
                 ) : null}
