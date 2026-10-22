@@ -309,8 +309,8 @@ describe("AUDIT_PAGE_SIX_FIELD: show stored target / reason / result", () => {
     expect(view.target).toEqual({ kind: "none", labelJa: "—", rawId: null });
     expect(leaked(view)).not.toContain("alice@example.com");
     expect(leaked(view)).not.toContain("SIXSECRET");
-    expect(view.result.reasonJa).not.toContain("alice@example.com");
-    expect(view.result.reasonJa).not.toContain("SIXSECRET");
+    expect(view.result.reasonJa ?? "").not.toContain("alice@example.com");
+    expect(view.result.reasonJa ?? "").not.toContain("SIXSECRET");
   });
 
   test("flag ON: metadata.result=error maps to failure; unknown result stays inferred", () => {

@@ -1,5 +1,5 @@
 import type { AuditEvent } from "@/lib/types";
-import { opaqueAuditId } from "./mask";
+import { opaqueAuditId, sanitizeAuditDisplayText } from "./mask";
 import type { AuditResultKind, AuditResultView } from "./types";
 
 export const AUDIT_RESULT_LABEL_JA: Record<AuditResultKind, string> = {
@@ -135,6 +135,41 @@ function actionKind(action: string): AuditResultKind | null {
     return "denied";
   }
   return null;
+}
+
+export function mapAdminStoredResult(value: unknown): AuditResultKind | null {
+  if (value === "success") return "success";
+  if (value === "denied") return "denied";
+  if (value === "error") return "failure";
+  if (value === "pending") return "pending";
+  return null;
+}
+
+function storedReasonParts(raw: unknown): { code: string | null; labelJa: string | null } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { code: null, labelJa: null };
+  }
+  const obj = raw as Record<string, unknown>;
+  const code = typeof obj.code === "string" ? opaqueAuditId(obj.code.trim()) : null;
+  const rawLabel = typeof obj.labelJa === "string" ? obj.labelJa : "";
+  const cleaned = rawLabel ? sanitizeAuditDisplayText(rawLabel).trim() : "";
+  const dirty =
+    !cleaned ||
+    cleaned.includes("@") ||
+    /token=|secret|pollurl|pollpath|statustoken|gb_emp_|gb_adm_|sp_at_/i.test(cleaned);
+  if (cleaned && !dirty) return { code, labelJa: cleaned };
+  if (code && AUDIT_REASON_JA[code]) return { code, labelJa: AUDIT_REASON_JA[code].ja };
+  return { code, labelJa: null };
+}
+
+/** Prefer the write-side six-field contract. Unknown result → null (fail-closed). */
+export function presentStoredSixFieldResult(
+  meta: Record<string, unknown>
+): AuditResultView | null {
+  const kind = mapAdminStoredResult(meta.result);
+  if (!kind) return null;
+  const { code, labelJa } = storedReasonParts(meta.reason);
+  return { kind, reasonCode: code, reasonJa: labelJa };
 }
 
 export function classifyAuditResult(event: Pick<AuditEvent, "action" | "metadata">): AuditResultView {
