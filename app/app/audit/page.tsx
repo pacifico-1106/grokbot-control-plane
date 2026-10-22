@@ -106,7 +106,7 @@ export default async function AuditPage({
   searchParams,
 }: {
   searchParams?: Promise<AuditPageSearchInput>;
-} = {}) {
+}) {
   const session = await getSessionContext();
   const canView = session.demo || hasCapability(session.member, "view_audit");
 
