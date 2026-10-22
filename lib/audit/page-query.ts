@@ -161,6 +161,12 @@ export function applyAuditPageQuery(
   search: AuditPageSearch
 ): { events: AuditEvent[]; nextCursor: string | null } {
   if (!orgId || search.rejected) return { events: [], nextCursor: null };
+  if (
+    search.cursor &&
+    !events.some((event) => event.orgId === orgId && event.id === search.cursor!.id)
+  ) {
+    return { events: [], nextCursor: null };
+  }
 
   const filtered = events.filter((event) => {
     if (event.orgId !== orgId) return false;

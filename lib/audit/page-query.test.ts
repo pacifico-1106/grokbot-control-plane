@@ -135,6 +135,16 @@ describe("applyAuditPageQuery", () => {
     expect(out.events.every((e) => e.orgId === ORG)).toBe(true);
   });
 
+  test("cursor from another org is fail-closed and does not leak", async () => {
+    const { applyAuditPageQuery, encodeAuditPageCursor, parseAuditPageSearch } = await import(
+      "./page-query"
+    );
+    const foreign = encodeAuditPageCursor(rows.find((e) => e.id === "aud_other")!);
+    const out = applyAuditPageQuery(rows, ORG, parseAuditPageSearch({ cursor: foreign }));
+    expect(out.events).toEqual([]);
+    expect(out.nextCursor).toBeNull();
+  });
+
   test("rejected search returns no rows (does not widen)", async () => {
     const { applyAuditPageQuery, parseAuditPageSearch } = await import("./page-query");
     const out = applyAuditPageQuery(rows, ORG, parseAuditPageSearch({ action: "admin.policy;drop" }));
