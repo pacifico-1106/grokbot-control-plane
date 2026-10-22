@@ -14,7 +14,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { DEMO_ORG } from "@/lib/demo-data";
-import { createApproval } from "@/lib/data/approvals";
+import { createApproval, getApprovalById } from "@/lib/data/approvals";
 import { callStaffpassMcpTool } from "@/lib/mcp/tools";
 import { GET as getApprovalStatus } from "@/app/api/approvals/status/route";
 import { employeeOwnsApproval } from "@/lib/approvals/status-authz";
@@ -280,6 +280,137 @@ describe("staffpass_get_approval_status caller binding", () => {
     expect(bodies[0].structured).toEqual(bodies[1].structured);
     expect(bodies[1].structured).toEqual(bodies[2].structured);
     expect(bodies[2].structured).toEqual(bodies[3].structured);
+  });
+});
+
+/**
+ * Live AI employees (稲盛 / ともり / 安藤) already poll with a statusToken
+ * they received before this leak fix. Tokens stay on the approval row;
+ * MCP only stops echoing them. Optional input must keep working.
+ */
+describe("staffpass_get_approval_status: held statusToken (稲盛 / ともり / 安藤)", () => {
+  const LIVE = [
+    { employeeId: "emp_inamori", label: "稲盛" },
+    { employeeId: "emp_tomori", label: "ともり" },
+    { employeeId: "emp_ando", label: "安藤" },
+  ] as const;
+
+  async function fileFor(employeeId: string) {
+    return createApproval({
+      orgId: DEMO_ORG.id,
+      employeeId,
+      credentialId: `cred_${employeeId}`,
+      title: TITLE,
+      purpose: "sales.outreach",
+      summary: SUMMARY,
+      risk: "low",
+      tool: "mail.send",
+      jobId: `job_live_${employeeId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    });
+  }
+
+  test("valid token + matching employee/org returns status", async () => {
+    for (const { employeeId } of LIVE) {
+      const created = await fileFor(employeeId);
+      const result = await callStaffpassMcpTool(
+        "staffpass_get_approval_status",
+        { approvalId: created.approval.id, statusToken: created.statusToken },
+        cred(employeeId)
+      );
+      const { structured, isError } = mcpBody(result);
+      expect(isError).toBe(false);
+      expect(structured.ok).toBe(true);
+      expect(structured.approvalId).toBe(created.approval.id);
+      expect(structured.status).toBe("pending");
+      expect(structured.employeeId).toBe(employeeId);
+      expect(JSON.stringify(structured)).not.toMatch(/"statusToken"\s*:/);
+    }
+  });
+
+  test("approvalId-only lookup works for the requesting employee", async () => {
+    for (const { employeeId } of LIVE) {
+      const created = await fileFor(employeeId);
+      const result = await callStaffpassMcpTool(
+        "staffpass_get_approval_status",
+        { approvalId: created.approval.id },
+        cred(employeeId)
+      );
+      const { structured, isError } = mcpBody(result);
+      expect(isError).toBe(false);
+      expect(structured.ok).toBe(true);
+      expect(structured.approvalId).toBe(created.approval.id);
+      expect(structured.status).toBe("pending");
+      expect(JSON.stringify(structured)).not.toMatch(/"statusToken"\s*:/);
+    }
+  });
+
+  test("token or id from another employee or org returns the same 404", async () => {
+    const inamori = await fileFor("emp_inamori");
+    const tomori = await fileFor("emp_tomori");
+    const cases = await Promise.all([
+      callStaffpassMcpTool(
+        "staffpass_get_approval_status",
+        { approvalId: inamori.approval.id, statusToken: inamori.statusToken },
+        cred("emp_tomori")
+      ),
+      callStaffpassMcpTool(
+        "staffpass_get_approval_status",
+        { approvalId: inamori.approval.id },
+        cred("emp_ando")
+      ),
+      callStaffpassMcpTool(
+        "staffpass_get_approval_status",
+        { approvalId: inamori.approval.id, statusToken: tomori.statusToken },
+        cred("emp_inamori")
+      ),
+      callStaffpassMcpTool(
+        "staffpass_get_approval_status",
+        { approvalId: inamori.approval.id, statusToken: inamori.statusToken },
+        cred("emp_inamori", "org_other")
+      ),
+    ]);
+    const bodies = cases.map((r) => mcpBody(r));
+    for (const body of bodies) {
+      expect(body.isError).toBe(true);
+      hidden404(body.structured);
+    }
+    expect(bodies[0].structured).toEqual(bodies[1].structured);
+    expect(bodies[1].structured).toEqual(bodies[2].structured);
+    expect(bodies[2].structured).toEqual(bodies[3].structured);
+  });
+
+  test("token issued before this change still works", async () => {
+    const created = await fileFor("emp_inamori");
+    // Pre-change clients cached this token from an older needs_approval body.
+    const heldToken = created.statusToken;
+    expect(heldToken).toMatch(/^st_/);
+
+    const withField = await callStaffpassMcpTool(
+      "staffpass_get_approval_status",
+      { approvalId: created.approval.id, statusToken: heldToken },
+      cred("emp_inamori")
+    );
+    const a = mcpBody(withField);
+    expect(a.isError).toBe(false);
+    expect(a.structured.ok).toBe(true);
+    expect(a.structured.approvalId).toBe(created.approval.id);
+    expect(a.structured.status).toBe("pending");
+    expect(JSON.stringify(a.structured)).not.toMatch(/"statusToken"\s*:/);
+
+    // Older handler alias (`token`) still accepted.
+    const withAlias = await callStaffpassMcpTool(
+      "staffpass_get_approval_status",
+      { approvalId: created.approval.id, token: heldToken },
+      cred("emp_inamori")
+    );
+    const b = mcpBody(withAlias);
+    expect(b.isError).toBe(false);
+    expect(b.structured.ok).toBe(true);
+    expect(b.structured.approvalId).toBe(created.approval.id);
+
+    // Token remains on the row for GET /api/approvals/status (bot pollUrl).
+    const row = await getApprovalById(created.approval.id, DEMO_ORG.id);
+    expect(row?.statusToken).toBe(heldToken);
   });
 });
 
