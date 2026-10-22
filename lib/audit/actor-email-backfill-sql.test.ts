@@ -71,7 +71,7 @@ describe("PR-6 actor_email backfill SQL (tenant + empty-only + mark)", () => {
     expect(body).toMatch(/backfill_audit_actor_email_pr6_batch/i);
     expect(body).toMatch(/rollback_audit_actor_email_pr6_batch/i);
     expect(body).toMatch(/for update of a skip locked/i);
-    expect(body).toMatch(/\bcommit\s*;/i);
+    expect(body).not.toMatch(/create or replace procedure/i);
   });
 
   test("every join is closed on org_id; null org raises", () => {
@@ -87,8 +87,17 @@ describe("PR-6 actor_email backfill SQL (tenant + empty-only + mark)", () => {
   test("updates empty actor_email only and never touches secret columns", () => {
     const updates = [...body.matchAll(/update\s+public\.audit_events[\s\S]*?;/gi)].map((m) => m[0]);
     expect(updates.length).toBeGreaterThan(0);
-    for (const stmt of updates) {
+    const fill = updates.filter((stmt) => /actor_email = src\.email/i.test(stmt));
+    const undo = updates.filter((stmt) => /actor_email = null/i.test(stmt));
+    expect(fill.length).toBeGreaterThan(0);
+    expect(undo.length).toBeGreaterThan(0);
+    for (const stmt of fill) {
       expect(stmt).toMatch(/audit_pr6_actor_email_empty/i);
+    }
+    for (const stmt of undo) {
+      expect(stmt).toMatch(/metadata->>'backfill' = 'actor_email_pr6'/);
+    }
+    for (const stmt of updates) {
       expect(stmt).not.toMatch(/\bstatus_token\b/i);
       expect(stmt).not.toMatch(/\bpoll_path\b/i);
       expect(stmt).not.toMatch(/\bpollPath\b/);
@@ -110,9 +119,9 @@ describe("PR-6 actor_email backfill SQL (tenant + empty-only + mark)", () => {
       expect(args).toMatch(/'backfill'/);
       expect(args).toMatch(/'actor_email_pr6'/);
       expect(args).not.toMatch(/m\.email/);
-      expect(args).not.toMatch(/actor_email/);
       expect(args).not.toMatch(/status_token/i);
       expect(args).not.toMatch(/poll/i);
+      expect(args).not.toMatch(/alice@/i);
     }
   });
 
@@ -124,11 +133,14 @@ describe("PR-6 actor_email backfill SQL (tenant + empty-only + mark)", () => {
   });
 
   test("apply / rollback org lists default empty (0 updates)", () => {
-    expect(apply).toMatch(/backfill_audit_actor_email_pr6_orgs/i);
-    expect(apply).toMatch(/array\s*\[\s*\]\s*::uuid\[\]/i);
-    expect(rollback).toMatch(/rollback_audit_actor_email_pr6_orgs/i);
-    expect(rollback).toMatch(/array\s*\[\s*\]\s*::uuid\[\]/i);
-    expect(body).toMatch(/cardinality\(p_org_ids\) = 0/i);
+    expect(apply).toMatch(/pr6_apply_orgs/);
+    expect(apply).toMatch(/delete from pr6_apply_orgs/);
+    expect(apply).toMatch(/backfill_audit_actor_email_pr6_batch/i);
+    expect(apply).not.toMatch(/insert into pr6_apply_orgs/);
+    expect(rollback).toMatch(/pr6_rollback_orgs/);
+    expect(rollback).toMatch(/delete from pr6_rollback_orgs/);
+    expect(rollback).toMatch(/rollback_audit_actor_email_pr6_batch/i);
+    expect(rollback).not.toMatch(/insert into pr6_rollback_orgs/);
   });
 
   test("rollback clears only the PR-6 mark and nulls actor_email", () => {
@@ -153,7 +165,7 @@ describe("PR-6 actor_email backfill SQL (tenant + empty-only + mark)", () => {
 
   test("helpers are revoked from PUBLIC / anon / authenticated", () => {
     expect(body).toMatch(/revoke all on function public\.backfill_audit_actor_email_pr6_batch/i);
-    expect(body).toMatch(/revoke all on procedure public\.backfill_audit_actor_email_pr6_orgs/i);
+    expect(body).toMatch(/revoke all on function public\.rollback_audit_actor_email_pr6_batch/i);
     expect(body).toMatch(/from public, anon, authenticated/i);
     expect(body).toMatch(/grant execute[\s\S]*to service_role/i);
   });

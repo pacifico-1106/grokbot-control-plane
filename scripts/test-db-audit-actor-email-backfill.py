@@ -68,14 +68,17 @@ def psql(extra, input_text=None):
         "postgres",
         *extra,
     ]
-    return subprocess.run(
+    result = subprocess.run(
         [str(x) for x in cmd],
         env=env,
         input=input_text,
         text=True,
         capture_output=True,
-        check=True,
     )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        raise SystemExit(f"FAIL psql {' '.join(str(x) for x in extra)}: {result.stderr.strip()}")
+    return result
 
 
 def query(command):
@@ -153,6 +156,15 @@ def secrets():
     )
 
 
+def drain(fn, org_id, limit=500):
+    total = 0
+    while True:
+        n = int(query(f"select public.{fn}('{org_id}', {limit});"))
+        total += n
+        if n == 0:
+            return total
+
+
 try:
     run(
         [BIN / "initdb", "-D", cluster / "data", "-U", "test_admin", "--auth=trust", "--no-locale"],
@@ -196,7 +208,7 @@ try:
         f"select actor_email from public.audit_events where id='{AUD_FILL}'"
     )
     assert empty_before == ""
-    psql(["-c", "call public.backfill_audit_actor_email_pr6_orgs(array[]::uuid[], 500);"])
+    psql(["-f", str(ROOT / "supabase/verification/20261022200000_audit_actor_email_backfill_apply.sql")])
     assert query(f"select coalesce(actor_email, '<null>') from public.audit_events where id='{AUD_FILL}'") == "<null>"
 
     raised = subprocess.run(
@@ -289,7 +301,7 @@ try:
     assert query(f"select coalesce(actor_email,'<null>') from public.audit_events where id='{AUD_B}'") == "<null>"
     assert query(f"select actor_email from public.audit_events where id='{AUD_KEEP}'") == "keep@a.example"
 
-    psql(["-c", f"call public.backfill_audit_actor_email_pr6_org('{ORG_B}', 500);"])
+    assert drain("backfill_audit_actor_email_pr6_batch", ORG_B) == 1
     assert query(f"select actor_email || '|' || (metadata->>'backfill') from public.audit_events where id='{AUD_B}'") == (
         "bob@b.example|actor_email_pr6"
     )
@@ -308,12 +320,12 @@ try:
         f"select actor_email || '|' || (metadata->>'backfill') from public.audit_events where id='{AUD_B}'"
     ) == "bob@b.example|actor_email_pr6"
 
-    psql(["-c", "call public.rollback_audit_actor_email_pr6_orgs(array[]::uuid[], 500);"])
+    psql(["-f", str(ROOT / "supabase/verification/20261022200000_audit_actor_email_backfill_rollback.sql")])
     assert query(
         f"select actor_email || '|' || (metadata->>'backfill') from public.audit_events where id='{AUD_B}'"
     ) == "bob@b.example|actor_email_pr6"
 
-    psql(["-c", f"call public.rollback_audit_actor_email_pr6_org('{ORG_B}', 500);"])
+    assert drain("rollback_audit_actor_email_pr6_batch", ORG_B) == 1
     assert query(f"select coalesce(actor_email,'<null>') from public.audit_events where id='{AUD_B}'") == "<null>"
     assert query(
         "select count(*) from public.audit_events where metadata->>'backfill' = 'actor_email_pr6'"

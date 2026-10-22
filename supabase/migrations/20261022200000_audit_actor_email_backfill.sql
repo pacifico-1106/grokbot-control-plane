@@ -7,8 +7,9 @@
 --
 -- Writes empty actor_email only (null / blank). Existing values —
 -- including synthetic org_owner / slack_* / approval_delivery_alert —
--- are not overwritten. Joins stay inside one org. Batches COMMIT so
--- large tables do not hold a long lock. metadata.backfill is the
+-- are not overwritten. Joins stay inside one org. Each SELECT batch
+-- is one short transaction (default 500, cap 2000, SKIP LOCKED).
+-- Repeat the apply SQL until updated = 0. metadata.backfill is the
 -- rollback mark 'actor_email_pr6' only — no email, hash, or secret.
 --
 -- Rollback (data): supabase/verification/20261022200000_audit_actor_email_backfill_rollback.sql
@@ -167,134 +168,22 @@ begin
 end
 $fn$;
 
-create or replace procedure public.backfill_audit_actor_email_pr6_org(
-  p_org_id uuid,
-  p_limit integer default 500
-)
-language plpgsql
-security invoker
-set search_path = pg_catalog, public
-as $proc$
-declare
-  n integer;
-begin
-  if p_org_id is null then
-    raise exception 'org_id_required';
-  end if;
-  loop
-    n := public.backfill_audit_actor_email_pr6_batch(p_org_id, p_limit);
-    commit;
-    exit when n = 0;
-  end loop;
-end
-$proc$;
-
-create or replace procedure public.rollback_audit_actor_email_pr6_org(
-  p_org_id uuid,
-  p_limit integer default 500
-)
-language plpgsql
-security invoker
-set search_path = pg_catalog, public
-as $proc$
-declare
-  n integer;
-begin
-  if p_org_id is null then
-    raise exception 'org_id_required';
-  end if;
-  loop
-    n := public.rollback_audit_actor_email_pr6_batch(p_org_id, p_limit);
-    commit;
-    exit when n = 0;
-  end loop;
-end
-$proc$;
-
-create or replace procedure public.backfill_audit_actor_email_pr6_orgs(
-  p_org_ids uuid[],
-  p_limit integer default 500
-)
-language plpgsql
-security invoker
-set search_path = pg_catalog, public
-as $proc$
-declare
-  oid uuid;
-  n integer;
-begin
-  if p_org_ids is null or cardinality(p_org_ids) = 0 then
-    return;
-  end if;
-  foreach oid in array p_org_ids loop
-    if oid is null then
-      continue;
-    end if;
-    loop
-      n := public.backfill_audit_actor_email_pr6_batch(oid, p_limit);
-      commit;
-      exit when n = 0;
-    end loop;
-  end loop;
-end
-$proc$;
-
-create or replace procedure public.rollback_audit_actor_email_pr6_orgs(
-  p_org_ids uuid[],
-  p_limit integer default 500
-)
-language plpgsql
-security invoker
-set search_path = pg_catalog, public
-as $proc$
-declare
-  oid uuid;
-  n integer;
-begin
-  if p_org_ids is null or cardinality(p_org_ids) = 0 then
-    return;
-  end if;
-  foreach oid in array p_org_ids loop
-    if oid is null then
-      continue;
-    end if;
-    loop
-      n := public.rollback_audit_actor_email_pr6_batch(oid, p_limit);
-      commit;
-      exit when n = 0;
-    end loop;
-  end loop;
-end
-$proc$;
-
 revoke all on function public.audit_pr6_approval_uuid(jsonb) from public, anon, authenticated;
 revoke all on function public.audit_pr6_is_rfc_email(text) from public, anon, authenticated;
 revoke all on function public.audit_pr6_actor_email_empty(text) from public, anon, authenticated;
 revoke all on function public.backfill_audit_actor_email_pr6_batch(uuid, integer) from public, anon, authenticated;
 revoke all on function public.rollback_audit_actor_email_pr6_batch(uuid, integer) from public, anon, authenticated;
-revoke all on procedure public.backfill_audit_actor_email_pr6_org(uuid, integer) from public, anon, authenticated;
-revoke all on procedure public.rollback_audit_actor_email_pr6_org(uuid, integer) from public, anon, authenticated;
-revoke all on procedure public.backfill_audit_actor_email_pr6_orgs(uuid[], integer) from public, anon, authenticated;
-revoke all on procedure public.rollback_audit_actor_email_pr6_orgs(uuid[], integer) from public, anon, authenticated;
 
 grant execute on function public.audit_pr6_approval_uuid(jsonb) to service_role;
 grant execute on function public.audit_pr6_is_rfc_email(text) to service_role;
 grant execute on function public.audit_pr6_actor_email_empty(text) to service_role;
 grant execute on function public.backfill_audit_actor_email_pr6_batch(uuid, integer) to service_role;
 grant execute on function public.rollback_audit_actor_email_pr6_batch(uuid, integer) to service_role;
-grant execute on procedure public.backfill_audit_actor_email_pr6_org(uuid, integer) to service_role;
-grant execute on procedure public.rollback_audit_actor_email_pr6_org(uuid, integer) to service_role;
-grant execute on procedure public.backfill_audit_actor_email_pr6_orgs(uuid[], integer) to service_role;
-grant execute on procedure public.rollback_audit_actor_email_pr6_orgs(uuid[], integer) to service_role;
 
 commit;
 
 -- ROLLBACK (down)
 --   begin;
---   drop procedure if exists public.rollback_audit_actor_email_pr6_orgs(uuid[], integer);
---   drop procedure if exists public.backfill_audit_actor_email_pr6_orgs(uuid[], integer);
---   drop procedure if exists public.rollback_audit_actor_email_pr6_org(uuid, integer);
---   drop procedure if exists public.backfill_audit_actor_email_pr6_org(uuid, integer);
 --   drop function if exists public.rollback_audit_actor_email_pr6_batch(uuid, integer);
 --   drop function if exists public.backfill_audit_actor_email_pr6_batch(uuid, integer);
 --   drop function if exists public.audit_pr6_actor_email_empty(text);
