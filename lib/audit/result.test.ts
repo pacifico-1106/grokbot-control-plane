@@ -75,7 +75,7 @@ describe("stored six-field result (PR-4)", () => {
       reason: "sent to alice@example.com",
     });
     expect(r?.kind).toBe("denied");
-    expect(r?.reasonJa).not.toContain("alice@example.com");
+    expect(r?.reasonJa).toBeNull();
     expect(JSON.stringify(r)).not.toContain("alice@example.com");
   });
 });
