@@ -38,6 +38,8 @@ const {
   isAdminAuditSixFieldWriteEnabledForOrg,
   isAuditPageAdminWhoEnabled,
   isAuditPageAdminWhoEnabledForOrg,
+  isAuditPageSixFieldEnabled,
+  isAuditPageSixFieldEnabledForOrg,
 } = await import("@/lib/feature-flags");
 
 const { isRecipientRoutingEnabled } = await import("@/lib/notify/recipient-routing");
@@ -76,6 +78,11 @@ describe("FLAGS-OFF REGRESSION: Feature flags default to OFF", () => {
   test("AUDIT_PAGE_ADMIN_WHO_ENABLED is OFF by default", () => {
     expect(isAuditPageAdminWhoEnabled()).toBe(false);
     expect(isAuditPageAdminWhoEnabledForOrg("org_any")).toBe(false);
+  });
+
+  test("AUDIT_PAGE_SIX_FIELD_ENABLED is OFF by default", () => {
+    expect(isAuditPageSixFieldEnabled()).toBe(false);
+    expect(isAuditPageSixFieldEnabledForOrg("org_any")).toBe(false);
   });
 });
 

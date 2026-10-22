@@ -81,6 +81,30 @@ const dirtyEvents: AuditEvent[] = [
     metadata: { startedBy: "member:mem_1" },
     createdAt: "2026-10-16T03:05:00.000Z",
   },
+  {
+    id: "aud_six",
+    orgId: ORG,
+    employeeId: "emp_sales",
+    credentialId: null,
+    actorEmail: "reviewer@example.com",
+    action: "admin.policy",
+    purpose: "admin.policy",
+    summary: "社内判定ルールを更新",
+    metadata: {
+      actorKind: "human",
+      tool: "internalAudienceRule.patch",
+      approvalId: "apr_ok",
+      target: { type: "org_internal_audience_rule", id: ORG },
+      reason: { code: "approved", labelJa: "カード確認のうえ実行しました" },
+      result: "success",
+      ruleSummary: { domainCount: 1, teamCount: 0, autoSlackTeamInternal: false },
+      pollPath: "/api/approvals/status?id=apr&token=SIXSECRET",
+      statusToken: "st_six_secret",
+      destination: "leaked-target@example.com",
+      rule: { emailDomains: ["secret-internal.example"] },
+    },
+    createdAt: "2026-10-16T03:08:00.000Z",
+  },
 ];
 
 const reviewer: OrgMember = {
@@ -197,6 +221,37 @@ describe("/app/audit readability", () => {
     expect(out).toContain(">AI</");
     expect(out).toContain("営業AI社員");
     expect(out).not.toContain("佐藤 花子");
+    expect(out).not.toContain("対象 社内相手ルール");
+    expect(out).not.toContain("カード確認のうえ実行しました");
+    expect(out).not.toContain("SIXSECRET");
+    expect(out).not.toContain("secret-internal.example");
+  });
+
+  test("AUDIT_PAGE_SIX_FIELD ON: list shows stored target/reason; secrets stay out", async () => {
+    const flag = "AUDIT_PAGE_SIX_FIELD_ENABLED";
+    const prev = process.env[flag];
+    process.env[flag] = "true";
+    try {
+      session = {
+        demo: false,
+        userId: "u1",
+        email: "owner@example.com",
+        orgId: ORG,
+        member: member(["view_dashboard", "view_audit"]),
+      };
+      const out = await html();
+      expect(out).toContain("対象 社内相手ルール");
+      expect(out).toContain("カード確認のうえ実行しました");
+      expect(out).not.toContain("SIXSECRET");
+      expect(out).not.toContain("st_six_secret");
+      expect(out).not.toContain("leaked-target@example.com");
+      expect(out).not.toContain("secret-internal.example");
+      expect(out).not.toContain("pollPath");
+      expect(out).not.toContain("statusToken");
+    } finally {
+      if (prev === undefined) delete process.env[flag];
+      else process.env[flag] = prev;
+    }
   });
 
   test("AUDIT_PAGE_ADMIN_WHO ON: policy.patch shows the human, hold trail stays 人", async () => {

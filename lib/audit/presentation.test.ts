@@ -1,7 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mapAuditRow } from "@/lib/data/mappers";
 import type { AuditEvent } from "@/lib/types";
 import { presentAuditRow, presentAuditRows } from "./presentation";
+
+const PAGE_SIX = "AUDIT_PAGE_SIX_FIELD_ENABLED";
+const PAGE_SIX_ORGS = "AUDIT_PAGE_SIX_FIELD_ORG_IDS";
 
 const ORG = "org_a";
 
@@ -189,5 +192,158 @@ describe("presentAuditRow", () => {
     expect(view.actor.emailMasked).toBe("o***@example.com");
     expect(leaked(view)).not.toContain("pollPath");
     expect(leaked(view)).not.toContain("/hidden");
+  });
+});
+
+describe("AUDIT_PAGE_SIX_FIELD: show stored target / reason / result", () => {
+  const envBackup: Record<string, string | undefined> = {};
+
+  function adminSix(partial: Partial<AuditEvent> = {}): AuditEvent {
+    return event({
+      employeeId: "emp_sales",
+      actorEmail: "reviewer@example.com",
+      action: "admin.policy",
+      purpose: "admin.policy",
+      summary: "社内判定ルールを更新",
+      metadata: {
+        actorKind: "human",
+        tool: "internalAudienceRule.patch",
+        approvalId: "apr_ok",
+        target: { type: "org_internal_audience_rule", id: ORG },
+        reason: { code: "approved", labelJa: "カード確認のうえ実行しました" },
+        result: "success",
+        ruleSummary: { domainCount: 1, teamCount: 0, autoSlackTeamInternal: false },
+        pollPath: "/api/approvals/status?id=apr&token=SIXSECRET",
+        statusToken: "st_six_secret",
+        destination: "leaked-target@example.com",
+        rule: { emailDomains: ["secret-internal.example"] },
+      },
+      ...partial,
+    });
+  }
+
+  beforeEach(() => {
+    envBackup[PAGE_SIX] = process.env[PAGE_SIX];
+    envBackup[PAGE_SIX_ORGS] = process.env[PAGE_SIX_ORGS];
+    delete process.env[PAGE_SIX];
+    delete process.env[PAGE_SIX_ORGS];
+  });
+
+  afterEach(() => {
+    for (const key of [PAGE_SIX, PAGE_SIX_ORGS]) {
+      if (envBackup[key] === undefined) delete process.env[key];
+      else process.env[key] = envBackup[key];
+    }
+  });
+
+  test("flag defaults OFF; missing orgId stays OFF", async () => {
+    const { isAuditPageSixFieldEnabled, isAuditPageSixFieldEnabledForOrg } = await import(
+      "@/lib/feature-flags"
+    );
+    expect(isAuditPageSixFieldEnabled()).toBe(false);
+    expect(isAuditPageSixFieldEnabledForOrg(ORG)).toBe(false);
+    expect(isAuditPageSixFieldEnabledForOrg(null)).toBe(false);
+    expect(isAuditPageSixFieldEnabledForOrg("")).toBe(false);
+  });
+
+  test("flag OFF: stored six-field still renders target as — (today)", () => {
+    const view = presentAuditRow(adminSix());
+    expect(view.target).toEqual({ kind: "none", labelJa: "—", rawId: null });
+    expect(view.result.reasonJa).not.toBe("カード確認のうえ実行しました");
+  });
+
+  test("flag ON: target / reason / result come from the stored six fields", () => {
+    process.env[PAGE_SIX] = "true";
+    const view = presentAuditRow(adminSix(), {
+      employeesById: new Map([["emp_sales", { displayName: "営業AI社員" }]]),
+    });
+    expect(view.target.labelJa).not.toBe("—");
+    expect(view.target.labelJa).toBe("社内相手ルール");
+    expect(view.target.kind).toBe("other");
+    expect(view.target.rawId).toBe(ORG.length > 8 ? ORG.slice(0, 8) : ORG);
+    expect(view.result.kind).toBe("success");
+    expect(view.result.reasonCode).toBe("approved");
+    expect(view.result.reasonJa).toBe("カード確認のうえ実行しました");
+    const blob = leaked(view);
+    expect(blob).not.toContain("SIXSECRET");
+    expect(blob).not.toContain("st_six_secret");
+    expect(blob).not.toContain("leaked-target@example.com");
+    expect(blob).not.toContain("secret-internal.example");
+    expect(blob).not.toContain("pollPath");
+    expect(blob).not.toContain("statusToken");
+    expect(blob).not.toContain('"rule"');
+  });
+
+  test("flag ON: employee target uses the lookup name, not —", () => {
+    process.env[PAGE_SIX] = "true";
+    const view = presentAuditRow(
+      adminSix({
+        metadata: {
+          target: { type: "employee", id: "emp_sales" },
+          reason: { code: "approved", labelJa: "承認されて実行しました" },
+          result: "success",
+        },
+      }),
+      { employeesById: new Map([["emp_sales", { displayName: "営業AI社員" }]]) }
+    );
+    expect(view.target.kind).toBe("employee");
+    expect(view.target.labelJa).toContain("社員");
+    expect(view.target.labelJa).toContain("営業AI社員");
+    expect(view.target.labelJa).not.toBe("—");
+  });
+
+  test("flag ON: email / secret target is fail-closed to — and does not leak", () => {
+    process.env[PAGE_SIX] = "true";
+    const view = presentAuditRow(
+      adminSix({
+        metadata: {
+          target: { type: "email", id: "alice@example.com" },
+          reason: {
+            code: "approved",
+            labelJa: "sent to alice@example.com token=SIXSECRET",
+          },
+          result: "success",
+        },
+      })
+    );
+    expect(view.target).toEqual({ kind: "none", labelJa: "—", rawId: null });
+    expect(leaked(view)).not.toContain("alice@example.com");
+    expect(leaked(view)).not.toContain("SIXSECRET");
+    expect(view.result.reasonJa).not.toContain("alice@example.com");
+    expect(view.result.reasonJa).not.toContain("SIXSECRET");
+  });
+
+  test("flag ON: metadata.result=error maps to failure; unknown result stays inferred", () => {
+    process.env[PAGE_SIX] = "true";
+    const error = presentAuditRow(
+      adminSix({
+        metadata: {
+          target: { type: "org", id: ORG },
+          reason: { code: "stale_base", labelJa: "元の設定が変わったため反映しませんでした" },
+          result: "error",
+        },
+      })
+    );
+    expect(error.result.kind).toBe("failure");
+    expect(error.target.labelJa).toBe("組織");
+
+    const bogus = presentAuditRow(
+      adminSix({
+        action: "admin.policy",
+        metadata: {
+          target: { type: "org", id: ORG },
+          result: "not_a_result",
+        },
+      })
+    );
+    expect(bogus.result.kind).not.toBe("success");
+  });
+
+  test("flag ON + org allowlist: other org stays today's —", () => {
+    process.env[PAGE_SIX] = "true";
+    process.env[PAGE_SIX_ORGS] = "org_pilot_only";
+    const view = presentAuditRow(adminSix());
+    expect(view.target.labelJa).toBe("—");
+    expect(view.result.reasonJa).not.toBe("カード確認のうえ実行しました");
   });
 });
