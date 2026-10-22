@@ -56,6 +56,7 @@ export async function POST(
   const authority = await assertWebActorApproverAuthority({
     orgId,
     memberId: gate.actor.id,
+    actorEmail: gate.actor.email,
     changes: [{ tool: "employees.credential.auto_renew", adminMutation: { employeeId, reason: "now" } }],
     surface: "employees.renew",
   });

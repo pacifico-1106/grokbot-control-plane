@@ -12,8 +12,16 @@
  * setting → refused (fail closed). Callers pass only the fields that actually
  * change; an empty list is not gated.
  */
-import { isApproverAuthorityEnabled } from "@/lib/feature-flags";
-import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { isAdminAuditWhoRequiredEnabledForOrg, isApproverAuthorityEnabled } from "@/lib/feature-flags";
+import {
+  ADMIN_AUDIT_SYSTEM_LABEL,
+  appendAdminAuditEvent,
+  humanAdminActor,
+  resolveAdminAuditActor,
+  systemAdminActor,
+  type AdminAuditActor,
+} from "@/lib/audit/admin-audit";
+import { extractEmail } from "@/lib/audit/mask";
 import { checkApproverAuthority } from "./verify";
 import { classifyApproverRequirement, type ApproverRequirement, type ApproverRequirementReason } from "./targets";
 import { approverAuthorityNextStepJa, approverAuthorityReplyJa } from "./reply";
@@ -49,9 +57,33 @@ export function webDirectRequirement(
   return kind ? { kind, reasons: [...reasons] } : null;
 }
 
+async function resolveWebDirectAuditActor(input: {
+  orgId: string;
+  memberId: string | null | undefined;
+  actorEmail?: string | null;
+}): Promise<AdminAuditActor> {
+  if (!isAdminAuditWhoRequiredEnabledForOrg(input.orgId)) {
+    return resolveAdminAuditActor({ orgId: input.orgId });
+  }
+  const memberId = (input.memberId || "").trim();
+  const passed = extractEmail(input.actorEmail);
+  if (passed) return humanAdminActor(passed, memberId || null);
+  if (memberId) {
+    const { getMemberById } = await import("@/lib/data/members");
+    const member = await getMemberById(memberId, input.orgId).catch(() => null);
+    if (member && member.orgId === input.orgId) {
+      const email = extractEmail(member.email);
+      if (email) return humanAdminActor(email, memberId);
+    }
+  }
+  return systemAdminActor(ADMIN_AUDIT_SYSTEM_LABEL.web);
+}
+
 export async function assertWebActorApproverAuthority(input: {
   orgId: string;
   memberId: string | null | undefined;
+  /** Human actor email when the denial is a dashboard save. */
+  actorEmail?: string | null;
   changes: readonly WebDirectChange[];
   context?: Parameters<typeof classifyApproverRequirement>[0]["context"];
   /** Audit label for the surface (e.g. "settings.notification_channels"). */
@@ -68,7 +100,7 @@ export async function assertWebActorApproverAuthority(input: {
   // A designated admin on an owner-required change cannot save it directly.
   const reason = decision.outcome === "endorse" ? "owner_approval_required" : decision.reason;
   await appendAdminAuditEvent({
-    actor: await resolveAdminAuditActor({ orgId: input.orgId }),
+    actor: await resolveWebDirectAuditActor(input),
     orgId: input.orgId,
     employeeId: null,
     credentialId: null,
