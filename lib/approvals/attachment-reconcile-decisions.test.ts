@@ -97,8 +97,8 @@ async function approved() {
   const q = await invokeComm(body);
   expect(q.httpStatus).toBe(402);
   const approvalId = String(q.body.approvalId);
-  await resolveApproval(approvalId, "approved", "ando@example.com", DEMO_ORG.id);
-  return { body, approvalId, statusToken: String(q.body.statusToken) };
+  const approval = (await resolveApproval(approvalId, "approved", "ando@example.com", DEMO_ORG.id))!;
+  return { body, approvalId, statusToken: approval.statusToken };
 }
 const fileUpload = (r: { body: Record<string, unknown> }) =>
   ((r.body.result || {}) as { fileUpload?: Record<string, unknown> }).fileUpload;

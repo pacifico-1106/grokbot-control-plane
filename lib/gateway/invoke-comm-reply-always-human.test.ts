@@ -336,7 +336,10 @@ describe("employee MCP staffpass_invoke", () => {
     const data = res.structuredContent as Record<string, unknown>;
     expect(data.needs_approval).toBe(true);
     expect(String(data.approvalId || "")).toBeTruthy();
-    expect("statusToken" in data).toBe(true);
+    expect("statusToken" in data).toBe(false);
+    expect("pollUrl" in data).toBe(false);
+    expect("pollPath" in data).toBe(false);
+    expect(data.pollHint).toBe("continue_polling");
     expect(res.isError).toBe(false);
     expect(posts.length).toBe(0);
   });

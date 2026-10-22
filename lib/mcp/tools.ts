@@ -8,6 +8,7 @@ import { closedByThreadMovedOn, closedWithoutSendInfo } from "@/lib/approvals/cl
  */
 import type { ResolvedEmployeeCredential } from "@/lib/auth/employee-credential";
 import {
+  getApprovalById,
   getApprovalStatusByToken,
   getBinding,
   getEmployeeById,
@@ -112,7 +113,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_invoke",
     description:
-      "Invoke a Staffpass Gateway tool under the employee badge. Requires purpose + jobId. Unknown tools are rejected. Confirm/send/order (and always_human policy) STOP for human approval — the result includes approvalId, statusToken, pollUrl, pollHint, title, and summary so you can poll without relying on prose Instructions. After approval, poll staffpass_get_approval_status: pollHint=fulfilled means the approved action was already executed by Staffpass (Slack posts are sent automatically on approval) — the job is done, do not re-invoke. Re-invoke with the same jobId + approvalId ONLY when pollHint=reinvoke_with_approvalId (if reinvokeReason is present, fix what it names first). When needs_approval carries approvalReasons[], it lists every reason (topic_gate, egress, always_human, action_limit, …); an AI-specified informationClass can raise but never lower the class. Never bypasses Gateway enforcement. Slack replies: use tool comm.reply and copy the wake's channel / ts / thread_ts / speakerId / speakerTeamId into conversation:{surface:\"slack\", slackChannelId, speakerId, speakerTeamId, ts, thread_ts} (slackChannelId = wake channel; omit thread_ts when null). Optional conversation.readThroughTs (the newest message ts you actually read) lets Staffpass refuse a reply when you already posted in that thread after it; when the operator enables the thread guard a reply can return 409 thread_busy (another reply to the same thread is in flight: retryable, wait retryAfterSeconds) or 409 thread_moved_on (you or another AI employee of your organization already replied after readThroughTs: not retryable, re-read the thread and decide again; for an approved send the approval is then closed as stale — do not re-run it, file a new request if still needed) — follow nextStep. The wake's slackUserId is yourself (the employee) — never use it as the recipient. To delete one of your OWN posts that Staffpass recorded (e.g. a duplicate send), use tool comm.delete with payload {surface:\"slack\", channel, ts} (channel/ts from the post's result); other people's posts and unrecorded posts are refused, LINE / Telegram return not_supported, a repeat returns status already_deleted. Disabled unless the operator turns it on.",
+      "Invoke a Staffpass Gateway tool under the employee badge. Requires purpose + jobId. Unknown tools are rejected. Confirm/send/order (and always_human policy) STOP for human approval — the result includes approvalId, pollHint, title, and summary so you can poll without relying on prose Instructions. After approval, poll staffpass_get_approval_status: pollHint=fulfilled means the approved action was already executed by Staffpass (Slack posts are sent automatically on approval) — the job is done, do not re-invoke. Re-invoke with the same jobId + approvalId ONLY when pollHint=reinvoke_with_approvalId (if reinvokeReason is present, fix what it names first). When needs_approval carries approvalReasons[], it lists every reason (topic_gate, egress, always_human, action_limit, …); an AI-specified informationClass can raise but never lower the class. Never bypasses Gateway enforcement. Slack replies: use tool comm.reply and copy the wake's channel / ts / thread_ts / speakerId / speakerTeamId into conversation:{surface:\"slack\", slackChannelId, speakerId, speakerTeamId, ts, thread_ts} (slackChannelId = wake channel; omit thread_ts when null). Optional conversation.readThroughTs (the newest message ts you actually read) lets Staffpass refuse a reply when you already posted in that thread after it; when the operator enables the thread guard a reply can return 409 thread_busy (another reply to the same thread is in flight: retryable, wait retryAfterSeconds) or 409 thread_moved_on (you or another AI employee of your organization already replied after readThroughTs: not retryable, re-read the thread and decide again; for an approved send the approval is then closed as stale — do not re-run it, file a new request if still needed) — follow nextStep. The wake's slackUserId is yourself (the employee) — never use it as the recipient. To delete one of your OWN posts that Staffpass recorded (e.g. a duplicate send), use tool comm.delete with payload {surface:\"slack\", channel, ts} (channel/ts from the post's result); other people's posts and unrecorded posts are refused, LINE / Telegram return not_supported, a repeat returns status already_deleted. Disabled unless the operator turns it on.",
     inputSchema: {
       type: "object",
       properties: {
@@ -234,7 +235,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_get_approval_status",
     description:
-      "Poll a human approval ticket with approvalId + statusToken (same as GET /api/approvals/status). Returns pending|approved|rejected|revision_requested|expired|superseded and pollHint (superseded / expired = closed without sending: a newer reply or request for the same conversation replaced it, or it timed out; pollHint=abort_job, do not re-send the same content). When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled — except while fulfillment.fileUpload.status=not_sent (only the approved text was posted): then pollHint=reinvoke_with_approvalId, and re-invoking with approvalId uploads the approved attachment once. The same hint when fulfillment.fileUpload.status=failed because Slack answered a definite error before sharing: then reinvokeReason={code, fix:{kind, needed?}, nextTool, nextToolEndpoint:\"/api/mcp/admin\", retryAfterFix} says what to fix and which admin tool to run first (no token / secret); re-invoke with approvalId after the fix. Admin credential secrets are never returned by this employee MCP: when resultRetrieval is present, authenticate to /api/mcp/admin and re-invoke the indicated admin tool with approvalId. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. When reinvoke_with_approvalId comes without reinvokeReason, reinvokeCode (pending_attachment / not_executed_yet / admin_result_required) may say why: re-invoke with the same approvalId and the same content, exactly once. If pollHint=fulfilled, the approved action is already done (e.g. the Slack post was sent automatically) — do not re-invoke. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
+      "Poll a human approval ticket with approvalId (bound to the calling employee and org). Returns pending|approved|rejected|revision_requested|expired|superseded and pollHint (superseded / expired = closed without sending: a newer reply or request for the same conversation replaced it, or it timed out; pollHint=abort_job, do not re-send the same content). When status=approved and the action has been auto-fulfilled (by the approval webhook), the fulfillment result is included in the response with pollHint=fulfilled — except while fulfillment.fileUpload.status=not_sent (only the approved text was posted): then pollHint=reinvoke_with_approvalId, and re-invoking with approvalId uploads the approved attachment once. The same hint when fulfillment.fileUpload.status=failed because Slack answered a definite error before sharing: then reinvokeReason={code, fix:{kind, needed?}, nextTool, nextToolEndpoint:\"/api/mcp/admin\", retryAfterFix} says what to fix and which admin tool to run first (no token / secret); re-invoke with approvalId after the fix. Admin credential secrets are never returned by this employee MCP: when resultRetrieval is present, authenticate to /api/mcp/admin and re-invoke the indicated admin tool with approvalId. If pollHint=reinvoke_with_approvalId, re-invoke with approvalId. When reinvoke_with_approvalId comes without reinvokeReason, reinvokeCode (pending_attachment / not_executed_yet / admin_result_required) may say why: re-invoke with the same approvalId and the same content, exactly once. If pollHint=fulfilled, the approved action is already done (e.g. the Slack post was sent automatically) — do not re-invoke. On revision_requested, revise per revisionNote and re-invoke with the same jobId and parentApprovalId.",
     inputSchema: {
       type: "object",
       properties: {
@@ -244,10 +245,10 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
         },
         statusToken: {
           type: "string",
-          description: "Opaque status token from needs_approval result.",
+          description: "Optional. Older clients may still send the opaque ticket token; new clients poll with approvalId only.",
         },
       },
-      required: ["approvalId", "statusToken"],
+      required: ["approvalId"],
       additionalProperties: false,
     },
   },
@@ -303,7 +304,7 @@ export const STAFFPASS_MCP_TOOLS: McpToolDef[] = [
   {
     name: "staffpass_decision_request",
     description:
-      "Create a decision request (稟議・決裁) for human approval. Tier is chosen from the org's configured tiers and tierRouting rules (keywords, tax-excluded amount, category; first match wins); with no rules it goes to the lowest-rank tier. A higher tier may be requested explicitly. Deputy user can be specified. Returns approvalId and statusToken for polling. P1_DECISION_WORKFLOW_ENABLED must be ON.",
+      "Create a decision request (稟議・決裁) for human approval. Tier is chosen from the org's configured tiers and tierRouting rules (keywords, tax-excluded amount, category; first match wins); with no rules it goes to the lowest-rank tier. A higher tier may be requested explicitly. Deputy user can be specified. Returns approvalId for polling. P1_DECISION_WORKFLOW_ENABLED must be ON.",
     inputSchema: {
       type: "object",
       properties: {
@@ -765,12 +766,14 @@ export async function callStaffpassMcpTool(
       });
 
       // Ensure approval return pipe fields are always present on needs_approval.
+      // Never echo statusToken / pollUrl / pollPath — poll with approvalId only.
       const out = { ...result.body };
+      delete out.statusToken;
+      delete out.pollUrl;
+      delete out.pollPath;
       if (out.needs_approval === true || out.code === "needs_approval") {
         if (!("pollHint" in out)) out.pollHint = "continue_polling";
         if (!("approvalId" in out)) out.approvalId = null;
-        if (!("statusToken" in out)) out.statusToken = null;
-        if (!("pollUrl" in out)) out.pollUrl = null;
         if (!("title" in out)) out.title = null;
         if (!("summary" in out)) out.summary = null;
       }
@@ -784,17 +787,15 @@ export async function callStaffpassMcpTool(
       const statusToken = String(
         args.statusToken || args.token || ""
       ).trim();
-      if (!approvalId || !statusToken) {
+      if (!approvalId) {
         return toolResult(
-          {
-            ok: false,
-            error: "id_and_token_required",
-            message: "approvalId and statusToken are required",
-          },
+          { ok: false, error: "not_found_or_invalid_token" },
           true
         );
       }
-      const approval = await getApprovalStatusByToken(approvalId, statusToken);
+      const approval = statusToken
+        ? await getApprovalStatusByToken(approvalId, statusToken)
+        : await getApprovalById(approvalId, cred.orgId);
       if (!approval || !employeeOwnsApproval(approval, cred)) {
         return toolResult(
           { ok: false, error: "not_found_or_invalid_token" },
@@ -853,7 +854,10 @@ export async function callStaffpassMcpTool(
             // human-approved and executeApproval claims it exactly once.
             const result = await fulfillConfigChangeApproval(approval).catch(() => null);
             if (result) {
-              const fresh = await getApprovalStatusByToken(approvalId, statusToken).catch(() => null);
+              const fresh = await (statusToken
+                ? getApprovalStatusByToken(approvalId, statusToken)
+                : getApprovalById(approvalId, cred.orgId)
+              ).catch(() => null);
               applied = fresh ? parseConfigChangeApplied(fresh.metadata) : null;
               if (fresh) approval.metadata = fresh.metadata;
             }

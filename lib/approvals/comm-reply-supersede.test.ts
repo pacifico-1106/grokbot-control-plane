@@ -192,7 +192,8 @@ describe("incident reproduction (flag ON)", () => {
     const res = await invoke(convBody("comm.send", DM_A, CAL_TEXT_1));
     const id = String(res.body.approvalId);
     await queue(DM_A, CAL_TEXT_2);
-    const url = `https://staffpass.test/api/approvals/status?id=${encodeURIComponent(id)}&token=${encodeURIComponent(String(res.body.statusToken))}`;
+    const stored = await getApprovalById(id, DEMO_ORG.id);
+    const url = `https://staffpass.test/api/approvals/status?id=${encodeURIComponent(id)}&token=${encodeURIComponent(String(stored?.statusToken))}`;
     const polled = await (await statusGET(new Request(url))).json();
     expect(polled.status).toBe("superseded");
     expect(polled.pollHint).toBe("abort_job");
@@ -206,7 +207,7 @@ describe("incident reproduction (flag ON)", () => {
         grokBotAgentId: "agent_test", grokBotWorkspaceId: null, credentialFingerprint: null, lastSuccessAt: null,
         lastError: null, wakeWebhookUrl: null, hasWakeWebhook: false, createdAt: now, updatedAt: now },
     } as ResolvedEmployeeCredential;
-    const mcp = await callStaffpassMcpTool("staffpass_get_approval_status", { approvalId: id, statusToken: String(res.body.statusToken) }, cred);
+    const mcp = await callStaffpassMcpTool("staffpass_get_approval_status", { approvalId: id }, cred);
     const out = mcp.structuredContent as Record<string, unknown>;
     expect(out.status).toBe("superseded");
     expect(out.pollHint).toBe("abort_job");

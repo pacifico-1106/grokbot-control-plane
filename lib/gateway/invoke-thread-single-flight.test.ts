@@ -496,7 +496,7 @@ describe("approval sends: the same check at fulfil", () => {
     recordSlack();
     const res = await invoke(dm("comm.send", B_TEXT, old()));
     const approvalId = String(res.body.approvalId);
-    const statusToken = String(res.body.statusToken);
+    const statusToken = String((await getApprovalById(approvalId, DEMO_ORG.id))?.statusToken);
     expect((await invoke(dm("comm.reply", A_TEXT))).httpStatus).toBe(200);
     await approve(approvalId);
     const { GET } = await import("@/app/api/approvals/status/route");

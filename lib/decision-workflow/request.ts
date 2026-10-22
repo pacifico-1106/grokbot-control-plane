@@ -446,8 +446,6 @@ export async function handleDecisionRequest(
     ok: true,
     code: "needs_approval",
     approvalId: approvalResult.approval.id,
-    statusToken: approvalResult.statusToken,
-    pollUrl: approvalResult.pollUrl,
     tier,
     tierReason: validation.tierReason,
     title: input.title,
