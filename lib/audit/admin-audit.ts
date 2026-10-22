@@ -205,7 +205,7 @@ async function attachApproverEmail(
   approval: AdminAuditApprovalRef,
   orgId?: string | null
 ): Promise<AdminAuditActor> {
-  if (actor.actorKind === "human") return actor;
+  if (actor.actorKind === "human" || actor.actorKind === "system") return actor;
   if (extractEmail(actor.actorEmail)) return actor;
   const fromResolved = extractEmail(approval.resolvedBy);
   if (fromResolved) return { ...actor, actorEmail: fromResolved };
@@ -213,7 +213,8 @@ async function attachApproverEmail(
   if (!memberId || !orgId) return actor;
   const { getMemberById } = await import("@/lib/data/members");
   const member = await getMemberById(memberId, orgId).catch(() => null);
-  const email = extractEmail(member?.email);
+  if (!member || member.orgId !== orgId) return actor;
+  const email = extractEmail(member.email);
   return email ? { ...actor, actorEmail: email } : actor;
 }
 
