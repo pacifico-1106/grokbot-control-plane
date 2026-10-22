@@ -108,6 +108,51 @@ afterEach(() => {
 });
 
 describe("staffpass_get_approval_status caller binding", () => {
+  test("requesting employee can poll with approvalId alone (no token)", async () => {
+    const created = await fileTicket();
+    const result = await callStaffpassMcpTool(
+      "staffpass_get_approval_status",
+      { approvalId: created.approval.id },
+      cred("emp_sales")
+    );
+    const { structured, isError } = mcpBody(result);
+    expect(isError).toBe(false);
+    expect(structured.ok).toBe(true);
+    expect(structured.approvalId).toBe(created.approval.id);
+    expect(structured.status).toBe("pending");
+    expect(structured.employeeId).toBe("emp_sales");
+    expect(structured.title).toBe(TITLE);
+    expect(JSON.stringify(structured)).not.toMatch(/"statusToken"\s*:/);
+  });
+
+  test("approvalId alone: other employee / other org / missing id → same 404", async () => {
+    const created = await fileTicket();
+    const cases = await Promise.all([
+      callStaffpassMcpTool(
+        "staffpass_get_approval_status",
+        { approvalId: created.approval.id },
+        cred("emp_ops")
+      ),
+      callStaffpassMcpTool(
+        "staffpass_get_approval_status",
+        { approvalId: created.approval.id },
+        cred("emp_other", "org_other")
+      ),
+      callStaffpassMcpTool(
+        "staffpass_get_approval_status",
+        { approvalId: "apr_does_not_exist" },
+        cred("emp_sales")
+      ),
+    ]);
+    const bodies = cases.map((r) => mcpBody(r));
+    for (const body of bodies) {
+      expect(body.isError).toBe(true);
+      hidden404(body.structured);
+    }
+    expect(bodies[0].structured).toEqual(bodies[1].structured);
+    expect(bodies[1].structured).toEqual(bodies[2].structured);
+  });
+
   test("requesting employee in the same org can read the ticket", async () => {
     const created = await fileTicket();
     const result = await callStaffpassMcpTool(
