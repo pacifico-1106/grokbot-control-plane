@@ -42,6 +42,8 @@ const {
   isAuditPageSixFieldEnabledForOrg,
   isAuditPageFilterPageEnabled,
   isAuditPageFilterPageEnabledForOrg,
+  isAdminAuditActorEmailBackfillEnabled,
+  isAdminAuditActorEmailBackfillEnabledForOrg,
   isTenantSettingsHealthEnabled,
   isTenantSettingsHealthEnabledForOrg,
 } = await import("@/lib/feature-flags");
@@ -92,6 +94,11 @@ describe("FLAGS-OFF REGRESSION: Feature flags default to OFF", () => {
   test("AUDIT_PAGE_FILTER_PAGE_ENABLED is OFF by default", () => {
     expect(isAuditPageFilterPageEnabled()).toBe(false);
     expect(isAuditPageFilterPageEnabledForOrg("org_any")).toBe(false);
+  });
+
+  test("ADMIN_AUDIT_ACTOR_EMAIL_BACKFILL_ENABLED is OFF by default", () => {
+    expect(isAdminAuditActorEmailBackfillEnabled()).toBe(false);
+    expect(isAdminAuditActorEmailBackfillEnabledForOrg("org_any")).toBe(false);
   });
 
   test("TENANT_SETTINGS_HEALTH_ENABLED is OFF by default", () => {
