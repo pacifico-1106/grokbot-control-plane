@@ -101,6 +101,7 @@ export async function POST(req: Request) {
   const issueAuthority = await assertWebActorApproverAuthority({
     orgId: orgId,
     memberId: gate.actor.id,
+    actorEmail: gate.actor.email,
     changes: [{
       tool: "employees.issue",
       adminMutation: {

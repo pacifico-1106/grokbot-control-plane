@@ -627,6 +627,8 @@ export type AuditAction =
   | "admin.billing"
   | "admin.external_contract_card"
   | "admin.portal"
+  | "admin.card_setup_link_mint"
+  | "admin.card_portal_link_mint"
   | "stuck_watch.w2_retry"
   | "stuck_watch.w1_notify"
   | "mcp.client_seen"

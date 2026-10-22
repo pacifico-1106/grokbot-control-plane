@@ -86,6 +86,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   const authority = await assertWebActorApproverAuthority({
     orgId,
     memberId: gate.actor.id,
+    actorEmail: gate.actor.email,
     changes: [{ tool: "web.employeeBinding", adminMutation: {}, kind: "owner_or_designated_admin" }],
     surface: "employees.binding",
   });

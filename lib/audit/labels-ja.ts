@@ -268,6 +268,8 @@ export const AUDIT_ACTION_LABELS_JA: Record<AuditAction, string> = {
   "admin.billing": "請求設定を更新",
   "admin.external_contract_card": "外部契約カードを操作",
   "admin.portal": "管理ポータルを操作",
+  "admin.card_setup_link_mint": "カード登録リンクを発行",
+  "admin.card_portal_link_mint": "カード変更リンクを発行",
   "stuck_watch.w2_retry": "未完了の仕事を再試行",
   "stuck_watch.w1_notify": "未返信を通知",
   "stuck_watch.audience_ledger_retry": "相手台帳の再試行",

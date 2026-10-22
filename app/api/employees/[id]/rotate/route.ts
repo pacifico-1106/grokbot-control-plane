@@ -63,6 +63,7 @@ export async function POST(
   const authority = await assertWebActorApproverAuthority({
     orgId,
     memberId: gate.actor.id,
+    actorEmail: gate.actor.email,
     changes: [{ tool: "web.employeeRotate", adminMutation: {}, kind: "owner_or_designated_admin" }],
     surface: "employees.rotate",
   });

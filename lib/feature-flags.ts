@@ -1395,6 +1395,41 @@ export function isMailPolicyInternalNomatchApprovalEnabledForOrg(
 }
 
 /**
+ * ADMIN_AUDIT_WHO_REQUIRED_ENABLED (default OFF).
+ *
+ * When ON (and org is in _ORG_IDS or the list is empty):
+ * - Every admin.* audit write must have a displayable who: human + actor_email,
+ *   or actorKind=system + actorLabel.
+ * - admin_agent / cron / webhook / system paths write actorKind=system with a
+ *   short label. Never fabricate an email.
+ *
+ * When OFF (default): existing human | admin_agent contract. admin_agent may
+ * have a null actor_email.
+ *
+ * _ORG_IDS: comma-separated org ids. Empty / unset → every org once the
+ * master flag is ON. Non-empty → only those orgs. Missing orgId stays OFF.
+ */
+export function isAdminAuditWhoRequiredEnabled(): boolean {
+  return parseFlag(process.env.ADMIN_AUDIT_WHO_REQUIRED_ENABLED);
+}
+
+export function adminAuditWhoRequiredOrgIds(): string[] {
+  return (process.env.ADMIN_AUDIT_WHO_REQUIRED_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isAdminAuditWhoRequiredEnabledForOrg(
+  orgId: string | null | undefined
+): boolean {
+  if (!isAdminAuditWhoRequiredEnabled()) return false;
+  if (!orgId) return false;
+  const list = adminAuditWhoRequiredOrgIds();
+  return list.length === 0 || list.includes(orgId);
+}
+
+/**
  * TENANT_SETTINGS_HEALTH_ENABLED (default OFF).
  *
  * When ON (and org is in _ORG_IDS or the list is empty):

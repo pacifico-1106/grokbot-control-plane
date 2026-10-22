@@ -2,7 +2,8 @@
  * Ingress handoff application.
  * Applies body and attachment modes to shape wake payload content.
  */
-import { appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { ADMIN_AUDIT_SYSTEM_LABEL, appendAdminAuditEvent, resolveAdminAuditActor } from "@/lib/audit/admin-audit";
+import { isAdminAuditWhoRequiredEnabledForOrg } from "@/lib/feature-flags";
 import { extractSealithIntent } from "./resolve";
 import type {
   AttachmentApproval,
@@ -164,7 +165,12 @@ export async function applyIngressHandoff(
       "attachmentApproval=manager: fail-closed (file bodies not passed pending manager approval implementation)";
 
     await appendAdminAuditEvent({
-      actor: await resolveAdminAuditActor({ orgId: options.orgId }),
+      actor: await resolveAdminAuditActor({
+        orgId: options.orgId,
+        ...(isAdminAuditWhoRequiredEnabledForOrg(options.orgId)
+          ? { systemLabel: ADMIN_AUDIT_SYSTEM_LABEL.ingress }
+          : {}),
+      }),
       orgId: options.orgId,
       employeeId: options.employeeId ?? null,
       credentialId: null,
@@ -195,7 +201,12 @@ export async function applyIngressHandoff(
       "sealith=required but no sealithTransferId: file bodies not passed (fail-closed)";
 
     await appendAdminAuditEvent({
-      actor: await resolveAdminAuditActor({ orgId: options.orgId }),
+      actor: await resolveAdminAuditActor({
+        orgId: options.orgId,
+        ...(isAdminAuditWhoRequiredEnabledForOrg(options.orgId)
+          ? { systemLabel: ADMIN_AUDIT_SYSTEM_LABEL.ingress }
+          : {}),
+      }),
       orgId: options.orgId,
       employeeId: options.employeeId ?? null,
       credentialId: null,

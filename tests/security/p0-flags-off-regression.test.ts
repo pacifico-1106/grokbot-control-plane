@@ -32,6 +32,8 @@ afterEach(() => {
 const {
   isAdminApproverPolicyRequired,
   isSlackApprovalStrict,
+  isAdminAuditWhoRequiredEnabled,
+  isAdminAuditWhoRequiredEnabledForOrg,
 } = await import("@/lib/feature-flags");
 
 const { isRecipientRoutingEnabled } = await import("@/lib/notify/recipient-routing");
@@ -55,6 +57,11 @@ describe("FLAGS-OFF REGRESSION: Feature flags default to OFF", () => {
 
   test("APPROVAL_RECIPIENT_ROUTING is OFF by default", () => {
     expect(isRecipientRoutingEnabled()).toBe(false);
+  });
+
+  test("ADMIN_AUDIT_WHO_REQUIRED_ENABLED is OFF by default", () => {
+    expect(isAdminAuditWhoRequiredEnabled()).toBe(false);
+    expect(isAdminAuditWhoRequiredEnabledForOrg("org_any")).toBe(false);
   });
 });
 
