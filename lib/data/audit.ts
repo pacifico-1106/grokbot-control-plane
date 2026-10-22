@@ -1,3 +1,9 @@
+import {
+  applyAuditPageQuery,
+  AUDIT_PAGE_FILTER_SIZE,
+  parseAuditPageSearch,
+  type AuditPageSearchInput,
+} from "../audit/page-query";
 import { getRuntimeAudit, pushRuntimeAuditEvent } from "../demo-data";
 import { isDemoMode } from "../mode";
 import { createSupabaseAdminClient } from "../supabase";
@@ -31,6 +37,39 @@ export async function listAuditEvents(
     .limit(limit);
   if (error || !data) return [];
   return data.map((r) => mapAuditRow(r as Record<string, unknown>));
+}
+
+/** Flag-ON /app/audit query: org-scoped filters + created_at cursor. */
+export async function queryAuditPageEvents(
+  orgId: string | null | undefined,
+  input: AuditPageSearchInput = {}
+): Promise<{ events: AuditEvent[]; nextCursor: string | null }> {
+  const search = parseAuditPageSearch(input);
+  if (!orgId || search.rejected) return { events: [], nextCursor: null };
+  if (isDemoMode()) {
+    return applyAuditPageQuery(getRuntimeAudit(), orgId, search);
+  }
+  const admin = createSupabaseAdminClient();
+  if (!admin) return { events: [], nextCursor: null };
+
+  const fetchLimit = search.result
+    ? AUDIT_PAGE_FILTER_SIZE * 4 + 1
+    : AUDIT_PAGE_FILTER_SIZE + 1;
+  let query = admin.from("audit_events").select("*").eq("org_id", orgId);
+  if (search.action) query = query.eq("action", search.action);
+  if (search.fromIso) query = query.gte("created_at", search.fromIso);
+  if (search.toIsoExclusive) query = query.lt("created_at", search.toIsoExclusive);
+  if (search.cursor) query = query.lte("created_at", search.cursor.createdAt);
+  const { data, error } = await query
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(fetchLimit);
+  if (error || !data) return { events: [], nextCursor: null };
+  return applyAuditPageQuery(
+    data.map((r) => mapAuditRow(r as Record<string, unknown>)),
+    orgId,
+    search
+  );
 }
 
 /** Recent audits for F7 stuck watch (wake + invoke + stuck_watch actions). */

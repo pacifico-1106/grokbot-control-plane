@@ -1528,6 +1528,39 @@ export function isAuditPageSixFieldEnabledForOrg(
 }
 
 /**
+ * AUDIT_PAGE_FILTER_PAGE_ENABLED (default OFF).
+ *
+ * When ON (and org is in _ORG_IDS or the list is empty):
+ * - /app/audit accepts action / date / result searchParams and a
+ *   created_at cursor. The legacy 100-row cap is not a hard stop.
+ *
+ * When OFF (default): today's listAuditEvents(orgId) 100-row page.
+ * Missing orgId stays OFF.
+ *
+ * _ORG_IDS: comma-separated org ids. Empty / unset → every org once the
+ * master flag is ON. Non-empty → only those orgs.
+ */
+export function isAuditPageFilterPageEnabled(): boolean {
+  return parseFlag(process.env.AUDIT_PAGE_FILTER_PAGE_ENABLED);
+}
+
+export function auditPageFilterPageOrgIds(): string[] {
+  return (process.env.AUDIT_PAGE_FILTER_PAGE_ORG_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isAuditPageFilterPageEnabledForOrg(
+  orgId: string | null | undefined
+): boolean {
+  if (!isAuditPageFilterPageEnabled()) return false;
+  if (!orgId) return false;
+  const list = auditPageFilterPageOrgIds();
+  return list.length === 0 || list.includes(orgId);
+}
+
+/**
  * TENANT_SETTINGS_HEALTH_ENABLED (default OFF).
  *
  * When ON (and org is in _ORG_IDS or the list is empty):

@@ -130,6 +130,14 @@ mock.module("@/lib/data", () => ({
     listCalls.push(orgId);
     return dirtyEvents.filter((e) => e.orgId === orgId);
   },
+  queryAuditPageEvents: async (
+    orgId?: string | null,
+    input?: { action?: string; from?: string; to?: string; result?: string; cursor?: string }
+  ) => {
+    listCalls.push(orgId);
+    const { applyAuditPageQuery, parseAuditPageSearch } = await import("@/lib/audit/page-query");
+    return applyAuditPageQuery(dirtyEvents, orgId, parseAuditPageSearch(input ?? {}));
+  },
   listEmployees: async (orgId?: string | null) =>
     orgId === ORG ? [{ id: "emp_sales", displayName: "営業AI社員", orgId: ORG }] : [],
   listMembers: async (orgId?: string | null) =>
@@ -163,8 +171,10 @@ mock.module("@/components/AppShell", () => ({
 
 const { default: AuditPage } = await import("./page");
 
-async function html(): Promise<string> {
-  return renderToStaticMarkup(await AuditPage());
+async function html(sp: Record<string, string> = {}): Promise<string> {
+  return renderToStaticMarkup(
+    await AuditPage({ searchParams: Promise.resolve(sp) })
+  );
 }
 
 describe("/app/audit readability", () => {
@@ -286,5 +296,49 @@ describe("/app/audit readability", () => {
     const out = await html();
     expect(listCalls).toEqual([]);
     expect(out).toContain("まだ監査イベントがありません");
+  });
+
+  test("AUDIT_PAGE_FILTER_PAGE OFF: searchParams do not filter; no form; legacy list", async () => {
+    session = {
+      demo: false,
+      userId: "u1",
+      email: "owner@example.com",
+      orgId: ORG,
+      member: member(["view_dashboard", "view_audit"]),
+    };
+    const out = await html({ action: "admin.policy" });
+    expect(out).toContain("Slackにメッセージを送信");
+    expect(out).toContain("営業AI社員 の権限を人確認のうえで更新");
+    expect(out).not.toContain("絞り込む");
+    expect(out).not.toContain("次のページ");
+  });
+
+  test("AUDIT_PAGE_FILTER_PAGE ON: action filter + form; invalid action is empty", async () => {
+    const flag = "AUDIT_PAGE_FILTER_PAGE_ENABLED";
+    const prev = process.env[flag];
+    process.env[flag] = "true";
+    try {
+      session = {
+        demo: false,
+        userId: "u1",
+        email: "owner@example.com",
+        orgId: ORG,
+        member: member(["view_dashboard", "view_audit"]),
+      };
+      const filtered = await html({ action: "admin.policy" });
+      expect(filtered).toContain("絞り込む");
+      expect(filtered).toContain("操作");
+      expect(filtered).toContain("営業AI社員 の権限を人確認のうえで更新");
+      expect(filtered).not.toContain("Slackにメッセージを送信");
+      expect(filtered).not.toContain("alice@example.com");
+
+      const rejected = await html({ action: "admin.policy;drop" });
+      expect(rejected).toContain("まだ監査イベントがありません");
+      expect(rejected).not.toContain("Slackにメッセージを送信");
+      expect(rejected).not.toContain("SECRETTOKEN");
+    } finally {
+      if (prev === undefined) delete process.env[flag];
+      else process.env[flag] = prev;
+    }
   });
 });

@@ -40,6 +40,7 @@ export {
 } from "./approvals";
 export {
   listAuditEvents,
+  queryAuditPageEvents,
   listAuditEventsForStuckWatch,
   isMentionWakeAudit,
   appendAuditEvent,
