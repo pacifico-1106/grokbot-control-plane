@@ -71,6 +71,47 @@ export async function getOrgInternalAudienceRule(
   );
 }
 
+export type InternalAudienceRuleRead =
+  | { status: "ok"; rule: OrgInternalAudienceRule }
+  | { status: "unavailable" };
+
+type InternalAudienceRuleAdmin = {
+  from: (table: string) => {
+    select: (cols: string) => {
+      eq: (col: string, val: string) => {
+        maybeSingle: () => Promise<{ data: unknown; error: unknown }>;
+      };
+    };
+  };
+};
+
+/**
+ * Distinguishes "rule not set" (ok + empty emailDomains) from "could not read"
+ * (supabase missing, org missing, or query error). Empty default is never
+ * inferred from a failed read.
+ */
+export async function readOrgInternalAudienceRule(
+  orgId?: string | null,
+  io?: { demo?: boolean; admin?: InternalAudienceRuleAdmin | null }
+): Promise<InternalAudienceRuleRead> {
+  const demo = io?.demo ?? isDemoMode();
+  if (demo) {
+    return { status: "ok", rule: demoRule ?? { ...DEFAULT_RULE, updatedAt: nowIso() } };
+  }
+  const admin = io && "admin" in io ? io.admin : createSupabaseAdminClient();
+  if (!admin || !orgId) return { status: "unavailable" };
+  const { data, error } = await admin
+    .from("orgs")
+    .select("internal_audience_rule")
+    .eq("id", orgId)
+    .maybeSingle();
+  if (error || !data) return { status: "unavailable" };
+  return {
+    status: "ok",
+    rule: normalizeRule((data as { internal_audience_rule?: unknown }).internal_audience_rule),
+  };
+}
+
 /**
  * Same rule as getOrgInternalAudienceRule, but a store error throws instead of
  * reading as the empty default. For checks where "no internal domains / teams"

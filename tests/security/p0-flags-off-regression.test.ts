@@ -36,6 +36,8 @@ const {
   isAdminAuditWhoRequiredEnabledForOrg,
   isAdminAuditSixFieldWriteEnabled,
   isAdminAuditSixFieldWriteEnabledForOrg,
+  isTenantSettingsHealthEnabled,
+  isTenantSettingsHealthEnabledForOrg,
 } = await import("@/lib/feature-flags");
 
 const { isRecipientRoutingEnabled } = await import("@/lib/notify/recipient-routing");
@@ -69,6 +71,11 @@ describe("FLAGS-OFF REGRESSION: Feature flags default to OFF", () => {
   test("ADMIN_AUDIT_SIX_FIELD_WRITE_ENABLED is OFF by default", () => {
     expect(isAdminAuditSixFieldWriteEnabled()).toBe(false);
     expect(isAdminAuditSixFieldWriteEnabledForOrg("org_any")).toBe(false);
+  });
+
+  test("TENANT_SETTINGS_HEALTH_ENABLED is OFF by default", () => {
+    expect(isTenantSettingsHealthEnabled()).toBe(false);
+    expect(isTenantSettingsHealthEnabledForOrg("org_any")).toBe(false);
   });
 });
 

@@ -98,6 +98,7 @@ export const ADMIN_MCP_AUDIT_LABELS_JA: Record<AdminMcpToolName, string> = {
   "approvalWorkflow.resendVoterVerification": "承認者確認を再送",
   "approvalWorkflow.listVoterBindings": "承認者登録を一覧",
   "setup.approverBindingStatus": "承認者登録の状態を確認",
+  "setup.tenantHealth": "テナント設定の健全性を確認",
   "approvalRoutes.get": "承認ルートを確認",
   "approvalRoutes.patch": "承認ルートを更新",
   "orgs.create": "テナントを作成",

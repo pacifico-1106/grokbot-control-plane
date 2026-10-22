@@ -65,6 +65,7 @@ export const ADMIN_MCP_TOOL_NAMES = [
   "approvalWorkflow.resendVoterVerification",
   "approvalWorkflow.listVoterBindings",
   "setup.approverBindingStatus",
+  "setup.tenantHealth",
   "approvalRoutes.get",
   "approvalRoutes.patch",
   "orgs.create",
