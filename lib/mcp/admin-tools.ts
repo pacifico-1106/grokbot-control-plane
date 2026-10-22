@@ -116,7 +116,8 @@ import {
   validateApprovalRoutesPatch,
   handleDeputyActivate,
 } from "@/lib/approval-kind-routes/mcp-handlers";
-import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
+import { isApprovalKindRoutesEnabled, isTenantSettingsHealthEnabledForOrg } from "@/lib/feature-flags";
+import { buildTenantSettingsHealth } from "@/lib/setup/tenant-health";
 import { handleChannelLedgerList } from "@/lib/admin-mcp/channel-ledger-list";
 import {
   CHANNEL_CLASSIFICATIONS,
@@ -1170,6 +1171,16 @@ export const ADMIN_MCP_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "setup.tenantHealth",
+    description:
+      "Diagnose tenant settings health for this org (read-only, no approval). Behind TENANT_SETTINGS_HEALTH_ENABLED + TENANT_SETTINGS_HEALTH_ORG_IDS (default OFF). Returns per-setting status (ok / missing / degraded) and the effect of the gap (blocks / draft_only / silent_default): internal domains, mail/reply/scheduling policy, voter bindings, notification channels, gateway, admin agent. Distinguishes Mode A (empty IAR emailDomains → all mail external → draft_only) from Mode B (domains set, no internal rule). Org from the credential only. No secrets, tokens, or full emails.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: "approvalRoutes.get",
     description:
       "Read approval routes policy (read-only, no approval required). P1 承認ルートの種類別設定: Returns effective routes for all kinds (post/mail/account/decision/other), source layer (org/employee/default), legacy workflow info. Omit employeeId for org policy; include for AI社員ごとの設定. Feature flag P1_APPROVAL_KIND_ROUTES_ENABLED must be ON for full functionality; otherwise returns legacy info only.",
@@ -1590,6 +1601,7 @@ const ADMIN_READ_ONLY_TOOLS_SET = new Set<string>([
   "approvalWorkflow.listVoterBindings",
   "approvalRoutes.get",
   "setup.approverBindingStatus",
+  "setup.tenantHealth",
   "orgs.status",
   "orgs.patch",
   "approvals.proxyResolve",
@@ -1640,6 +1652,7 @@ export function isAdminMcpToolName(name: string): boolean {
 export function listAdminMcpToolsForOrg(orgId: string | null | undefined): McpToolDef[] {
   return ADMIN_MCP_TOOLS.filter((tool) => {
     if (tool.name === CREDENTIAL_AUTO_RENEW_ADMIN_TOOL) return isCredentialAutoRenewOnForOrg(orgId);
+    if (tool.name === "setup.tenantHealth") return isTenantSettingsHealthEnabledForOrg(orgId);
     return true;
   });
 }
@@ -3244,6 +3257,33 @@ export async function callAdminMcpTool(
           ? null
           : "approvalWorkflow.bindVoter",
     });
+  }
+
+  if (name === "setup.tenantHealth") {
+    if (!isTenantSettingsHealthEnabledForOrg(cred.orgId)) {
+      return toolResult(
+        {
+          ok: false,
+          code: "feature_disabled",
+          message: "TENANT_SETTINGS_HEALTH_ENABLED is OFF",
+        },
+        true
+      );
+    }
+    if (!cred.orgId) {
+      return toolResult(
+        { ok: false, readOnly: true, code: "org_required", message: "orgId missing on credential (fail-closed)" },
+        true
+      );
+    }
+    try {
+      return toolResult(await buildTenantSettingsHealth(cred.orgId));
+    } catch {
+      return toolResult(
+        { ok: false, readOnly: true, code: "tenant_settings_health_unavailable" },
+        true
+      );
+    }
   }
 
   // P1 Approval Kind Routes

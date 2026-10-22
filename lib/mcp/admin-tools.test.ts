@@ -73,6 +73,7 @@ const READ_ONLY_TOOLS = [
   "setup.connectInternalBase",
   "setup.lineApprovalStatus",
   "setup.approverBindingStatus",
+  "setup.tenantHealth",
   "ingressHandoff.get",
   "schedulingPolicy.get",
   "replyPolicy.get",

@@ -31,7 +31,8 @@ import { parseAdminFulfillment } from "@/lib/admin-mcp/fulfill-admin";
 import { parseFulfillment } from "@/lib/approvals/fulfill";
 import { approvalNotSentInfo, notSentFulfillmentResult } from "@/lib/approvals/not-sent";
 import { handleDecisionRequest, type DecisionRequestInput } from "@/lib/decision-workflow";
-import { isApprovalReasonsEnabled, isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled, isTopicGatedPostingEnabled, isWhoamiCredentialInfoEnabled } from "@/lib/feature-flags";
+import { isApprovalReasonsEnabled, isConfigChangeRequestEnabled, isMcpEndpointHandoffEnabled, isTenantSettingsHealthEnabledForOrg, isTopicGatedPostingEnabled, isWhoamiCredentialInfoEnabled } from "@/lib/feature-flags";
+import { attachTenantSettingsHealth } from "@/lib/setup/tenant-health";
 import { employeeOwnsApproval } from "@/lib/approvals/status-authz";
 import { getOrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/data";
 import type { OrgApprovalKindRoutesPolicy } from "@/lib/approval-kind-routes/types";
@@ -583,7 +584,10 @@ export async function callStaffpassMcpTool(
           true
         );
       }
-      if (isWhoamiCredentialInfoEnabled() && employee.orgId !== cred.orgId) {
+      if (
+        (isWhoamiCredentialInfoEnabled() || isTenantSettingsHealthEnabledForOrg(cred.orgId)) &&
+        employee.orgId !== cred.orgId
+      ) {
         return toolResult(
           {
             ok: false,
@@ -614,16 +618,19 @@ export async function callStaffpassMcpTool(
         };
       }
       return toolResult(
-        buildStaffpassWhoamiPayload({
-          employee,
+        await attachTenantSettingsHealth(
           orgId,
-          binding,
-          generation: cred.generation,
-          projects,
-          defaultProjectId: projects.find((item) => item.isDefault)?.id,
-          configChange,
-          credentialInfo,
-        })
+          buildStaffpassWhoamiPayload({
+            employee,
+            orgId,
+            binding,
+            generation: cred.generation,
+            projects,
+            defaultProjectId: projects.find((item) => item.isDefault)?.id,
+            configChange,
+            credentialInfo,
+          })
+        )
       );
     }
     case "staffpass_invoke": {
@@ -942,38 +949,40 @@ export async function callStaffpassMcpTool(
     case "staffpass_health": {
       const binding = (await getBinding(cred.employeeId)) ?? cred.binding;
       const runtimeMode = runtimeModeLabel();
-      return toolResult({
-        ok: true,
-        runtimeMode,
-        demo: isDemoMode(),
-        supabaseConfigured: !isDemoMode(),
-        stripeConfigured: isStripeConfigured(),
-        resendConfigured: isResendConfigured(),
-        employeeId: cred.employeeId,
-        orgId: cred.orgId,
-        generation: cred.generation,
-        binding: binding
-          ? {
-              status: binding.status,
-              grokBotAgentId: binding.grokBotAgentId,
-              lastSuccessAt: binding.lastSuccessAt,
-              lastError: binding.lastError,
-              credentialGeneration: binding.credentialGeneration,
-            }
-          : null,
-        mcpEndpoint: opts?.surface === "badge_only" ? "/api/mcp/employee" : "/api/mcp",
-        gatewayEndpoint: "/api/gateway/invoke",
-        // MCP endpoint handoff ON: origin from app config (no hardcode) + absolute URL.
-        ...(isMcpEndpointHandoffEnabled()
-          ? {
-              publicOrigin: resolveAppOrigin(),
-              mcpEndpointUrl:
-                opts?.surface === "badge_only"
-                  ? `${resolveAppOrigin()}/api/mcp/employee`
-                  : resolveMcpEndpointUrl(),
-            }
-          : { publicOrigin: "https://staffpass.sealith.com" }),
-      });
+      return toolResult(
+        await attachTenantSettingsHealth(cred.orgId, {
+          ok: true,
+          runtimeMode,
+          demo: isDemoMode(),
+          supabaseConfigured: !isDemoMode(),
+          stripeConfigured: isStripeConfigured(),
+          resendConfigured: isResendConfigured(),
+          employeeId: cred.employeeId,
+          orgId: cred.orgId,
+          generation: cred.generation,
+          binding: binding
+            ? {
+                status: binding.status,
+                grokBotAgentId: binding.grokBotAgentId,
+                lastSuccessAt: binding.lastSuccessAt,
+                lastError: binding.lastError,
+                credentialGeneration: binding.credentialGeneration,
+              }
+            : null,
+          mcpEndpoint: opts?.surface === "badge_only" ? "/api/mcp/employee" : "/api/mcp",
+          gatewayEndpoint: "/api/gateway/invoke",
+          // MCP endpoint handoff ON: origin from app config (no hardcode) + absolute URL.
+          ...(isMcpEndpointHandoffEnabled()
+            ? {
+                publicOrigin: resolveAppOrigin(),
+                mcpEndpointUrl:
+                  opts?.surface === "badge_only"
+                    ? `${resolveAppOrigin()}/api/mcp/employee`
+                    : resolveMcpEndpointUrl(),
+              }
+            : { publicOrigin: "https://staffpass.sealith.com" }),
+        })
+      );
     }
     case "staffpass_stuck_list": {
       const orgId = cred.orgId;
