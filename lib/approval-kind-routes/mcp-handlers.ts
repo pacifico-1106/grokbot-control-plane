@@ -20,7 +20,8 @@ import { getEffectiveApprovalWorkflowPolicy } from "@/lib/approval-workflow";
 import { validateApprovalRoutes, type ValidatorContext } from "./validate";
 import type { OrgApprovalKindRoutesPolicy, ApprovalKind } from "./types";
 import { APPROVAL_KINDS } from "./types";
-import { isApprovalKindRoutesEnabled } from "@/lib/feature-flags";
+import { maskEmail } from "@/lib/audit/mask";
+import { isApprovalKindRoutesEnabled, isAdminAuditSixFieldWriteEnabledForOrg } from "@/lib/feature-flags";
 
 export interface ApprovalRoutesGetResult {
   ok: boolean;
@@ -445,7 +446,9 @@ export async function fulfillApprovalRoutesPatch(
       approvalId: approval.id,
       policyId: (afterSnapshot as { policyId?: string }).policyId,
       filedBy: (meta.invoke as { actorId?: string })?.actorId ?? null,
-      approvedBy: approval.resolvedBy,
+      approvedBy: isAdminAuditSixFieldWriteEnabledForOrg(approval.orgId)
+        ? maskEmail(approval.resolvedBy)
+        : approval.resolvedBy,
       diff: diffSummary,
     },
   });
@@ -569,7 +572,7 @@ export async function handleDeputyActivate(
       approvalId: result.approval.id,
       originalApprovalId: approvalId,
       deputyUserId,
-      ...(reason ? { reason } : {}),
+      reason,
     },
   });
 

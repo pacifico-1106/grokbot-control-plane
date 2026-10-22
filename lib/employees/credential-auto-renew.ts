@@ -25,7 +25,9 @@ import {
 import { getEmployee } from "@/lib/data/employees";
 import { isUuid } from "@/lib/data/members";
 import { credentialExpiry } from "@/lib/employees/credential-expiry";
+import { maskEmail } from "@/lib/audit/mask";
 import {
+  isAdminAuditSixFieldWriteEnabledForOrg,
   isCredentialAutoRenewEnabled,
   isCredentialAutoRenewOrgAllowlistRequired,
 } from "@/lib/feature-flags";
@@ -368,7 +370,9 @@ export async function fulfillCredentialAutoRenew(
         threshold: "now",
         tool: CREDENTIAL_AUTO_RENEW_ADMIN_TOOL,
         actor: requesterOf(approval),
-        approver: approval.resolvedBy ?? null,
+        approver: isAdminAuditSixFieldWriteEnabledForOrg(orgId)
+          ? maskEmail(approval.resolvedBy)
+          : approval.resolvedBy ?? null,
         ...extra,
       },
     }).catch(() => undefined);
