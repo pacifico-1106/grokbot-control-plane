@@ -17,7 +17,7 @@
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.57.4",
     "@vercel/functions": "^3.9.5",
-    "next": "15.5.23",
+    "next": "15.5.28",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "resend": "^4.8.0",
@@ -32,9 +32,17 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "15.5.23",
+    "eslint-config-next": "15.5.28",
     "server-only": "^0.0.1",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "overrides": {
+    "sharp": "0.35.5"
+  },
+  "pnpm": {
+    "overrides": {
+      "sharp": "0.35.5"
+    }
   }
 }
