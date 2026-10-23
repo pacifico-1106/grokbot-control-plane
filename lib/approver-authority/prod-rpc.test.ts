@@ -1,8 +1,10 @@
 /**
  * PR-D, production code paths against a fake Supabase admin client (fixture
  * env only; fetch stays blocked by the no-network preload):
- * - W1 RPC: flag OFF sends exactly today's 7 arguments; flag ON adds
- *   p_enforce_approver_authority and surfaces the RPC reason; RPC error → fail closed.
+ * - W1 RPC: flag OFF with no requiredApproverKind sends exactly today's 7
+ *   arguments; flag OFF with requiredApproverKind set (M2 auth-link tickets)
+ *   or flag ON adds p_enforce_approver_authority and surfaces the RPC reason;
+ *   RPC error → fail closed.
  * - approver_authority_check: requester ids passed; error / garbage → approver_unverified.
  * - createApproval: insert failure with a requirement never falls back to the legacy insert.
  */
@@ -72,14 +74,23 @@ const row = (over: Record<string, unknown> = {}) => ({
 const w1Calls = () => calls.filter((c) => c.kind === "rpc" && c.name === "resolve_approval_w1_checked");
 
 describe("resolve_approval_w1_checked", () => {
-  test("flag OFF: exactly today's 7 arguments", async () => {
+  test("flag OFF and no required kind: exactly today's 7 arguments", async () => {
     delete process.env.APPROVER_AUTHORITY_ENABLED;
-    tableResponder = (table) => (table === "approval_requests" ? { data: row(), error: null } : { data: null, error: null });
+    tableResponder = (table) =>
+      table === "approval_requests" ? { data: row({ required_approver_kind: null }), error: null } : { data: null, error: null };
     rpcResponder = () => ({ data: { ok: true }, error: null });
     await resolveApprovalWithoutWorkflowDetailed(TICKET, "approved", "fixture", ORG, { memberId: OWNER, actorId: OWNER });
     expect(Object.keys(w1Calls()[0].args!).sort()).toEqual(
       ["p_actor", "p_decision", "p_decision_id", "p_id", "p_member_id", "p_org", "p_revision_note"]
     );
+  });
+
+  test("flag OFF but requiredApproverKind set: M2 still sends p_enforce_approver_authority", async () => {
+    delete process.env.APPROVER_AUTHORITY_ENABLED;
+    tableResponder = (table) => (table === "approval_requests" ? { data: row(), error: null } : { data: null, error: null });
+    rpcResponder = () => ({ data: { ok: true }, error: null });
+    await resolveApprovalWithoutWorkflowDetailed(TICKET, "approved", "fixture", ORG, { memberId: OWNER, actorId: OWNER });
+    expect(w1Calls()[0].args!.p_enforce_approver_authority).toBe(true);
   });
 
   test("flag ON: enforce flag sent; the RPC reason is surfaced; RPC error fails closed", async () => {

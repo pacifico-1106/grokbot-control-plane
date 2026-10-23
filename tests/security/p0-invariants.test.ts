@@ -70,11 +70,20 @@ mock.module("@/lib/mode", () => ({
   runtimeModeLabel: () => "demo",
 }));
 
+const demoAudit: unknown[] = [];
+
 mock.module("@/lib/demo-data", () => ({
   getRuntimeMemberById: (id: string) => demoMembers.get(id) ?? null,
   setRuntimeMember: (m: OrgMember) => demoMembers.set(m.id, m),
   resetRuntimeMembers: () => demoMembers.clear(),
   DEMO_ORG: { id: "demo_org_fixture" },
+  // Import graph (recipient-routing → notification-channels → audit) reads these.
+  getRuntimeAudit: () => demoAudit,
+  pushRuntimeAuditEvent: (event: Record<string, unknown>) => {
+    const row = { id: `aud_invariant_${demoAudit.length}`, createdAt: new Date().toISOString(), ...event };
+    demoAudit.unshift(row);
+    return row;
+  },
 }));
 
 const {

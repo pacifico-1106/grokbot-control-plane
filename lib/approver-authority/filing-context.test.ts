@@ -111,11 +111,21 @@ describe("schedulingPolicy.patch", () => {
     await expect(assertApprovalExecutionAuthority(stripped)).rejects.toThrow("approver_context_changed");
   });
 
-  test("flag OFF → today's behaviour", async () => {
+  test("flag OFF: a ticket that already has requiredApproverKind still refuses a changed context (M2)", async () => {
     await setOrgSchedulingPolicy(ORG, capPolicy(5000) as never);
     const t = await fileApproved("schedulingPolicy.patch", capPolicy(9000));
+    expect(t.requiredApproverKind).toBe("owner");
     await setOrgSchedulingPolicy(ORG, capPolicy(3000) as never);
     delete process.env[FLAG];
+    await expect(assertApprovalExecutionAuthority(t)).rejects.toThrow("approver_context_changed");
+  });
+
+  test("flag OFF: a ticket without requiredApproverKind keeps today's behaviour", async () => {
+    delete process.env[FLAG];
+    await setOrgSchedulingPolicy(ORG, capPolicy(5000) as never);
+    const t = await fileApproved("schedulingPolicy.patch", capPolicy(9000));
+    expect(t.requiredApproverKind ?? null).toBeNull();
+    await setOrgSchedulingPolicy(ORG, capPolicy(3000) as never);
     await expect(assertApprovalExecutionAuthority(t)).resolves.toBeUndefined();
   });
 });

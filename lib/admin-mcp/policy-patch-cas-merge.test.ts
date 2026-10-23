@@ -40,7 +40,7 @@ await mocks.mock("@/lib/data/org-context", {
 
 const { fulfillApprovedAdmin } = await import("@/lib/admin-mcp/fulfill-admin");
 const { POLICY_PATCH_CARD_KEY } = await import("@/lib/admin-mcp/policy-patch-guard");
-const { createApproval, getApprovalById, listApprovals, listAuditEvents } = await import("@/lib/data");
+const { getApprovalById, listApprovals, listAuditEvents } = await import("@/lib/data");
 const { getEmployee, issueEmployee } = await import("@/lib/data/employees");
 const { resetDemoAdminAgent } = await import("@/lib/data/admin-agents");
 const { DEMO_ORG, getRuntimeEmployees, resetRuntimeMembers } = await import("@/lib/demo-data");
@@ -220,19 +220,13 @@ describe("fulfil order: earlier gates win", () => {
     const e = await hire();
     const { d } = await file({ employeeId: e.id, scopes: [...BASE_SCOPES, "slack:post"], approvalPolicy: "risk_based" });
     const t = (await getApprovalById(String(d.approvalId), ORG))!;
-    const mutation = { ...(t.metadata?.adminMutation as Record<string, unknown>) };
-    const id = await (async () => {
-      const created = await createApproval({
-        orgId: ORG, employeeId: "", credentialId: "", title: "権限の更新", purpose: "admin.policy", summary: "x".repeat(1200),
-        risk: "high", tool: "policy.patch", jobId: `job_pcm_cut_${++seq}`,
-        metadata: { ...(t.metadata ?? {}), adminMutation: mutation },
-        approverAuthority: t.approverAuthority ?? undefined,
-        requiredApproverKind: t.requiredApproverKind ?? undefined,
-      } as never);
-      return created.approval.id;
-    })();
+    // Keep the filed F2 fingerprint. createApproval({ requiredApproverKind }) is the
+    // M2 auth-link override and would drop contextFingerprint, so the pre-fulfil
+    // F2 check would win with approver_context_changed before the card gate.
+    const { demoUpdateApproval } = await import("@/lib/data/demo-approvals-store");
+    await demoUpdateApproval(t.id, { summary: "x".repeat(1200) });
     live(e.id).allowedPurposes = ["ops.other"];
-    const f = await approveAndFulfil(id);
+    const f = await approveAndFulfil(t.id);
     expect(f).toMatchObject({ ok: false, error: "card_truncated" });
   });
   test("employee moved to another org after approval: flag ON → refused (F2 pre-check: unreadable); flag OFF → employee_not_found (step 4 org match)", async () => {
