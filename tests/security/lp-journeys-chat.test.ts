@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { GuestSigningKeyMissingError } from "@/lib/lp/guest-signing-key";
 
 const envBackup = {
   journeysEnabled: process.env.LP_JOURNEYS_ENABLED,
@@ -18,7 +19,10 @@ const envBackup = {
   botProtection: process.env.LP_INQUIRY_BOT_PROTECTION_ENABLED,
   rateLimit: process.env.LP_INQUIRY_RATE_LIMIT_ENABLED,
   jwtSecret: process.env.LP_JWT_SECRET,
+  guestSigningKey: process.env.GUEST_SIGNING_KEY,
 };
+
+const TEST_GUEST_SIGNING_KEY = "test-guest-signing-key-lp-chat-32ch!!";
 
 beforeEach(() => {
   delete process.env.LP_JOURNEYS_ENABLED;
@@ -26,6 +30,7 @@ beforeEach(() => {
   delete process.env.LP_INQUIRY_BOT_PROTECTION_ENABLED;
   delete process.env.LP_INQUIRY_RATE_LIMIT_ENABLED;
   process.env.LP_JWT_SECRET = "test-secret-for-testing-only-32chars!!";
+  process.env.GUEST_SIGNING_KEY = TEST_GUEST_SIGNING_KEY;
 });
 
 afterEach(() => {
@@ -37,6 +42,11 @@ afterEach(() => {
     process.env.LP_JWT_SECRET = envBackup.jwtSecret;
   } else {
     delete process.env.LP_JWT_SECRET;
+  }
+  if (envBackup.guestSigningKey) {
+    process.env.GUEST_SIGNING_KEY = envBackup.guestSigningKey;
+  } else {
+    delete process.env.GUEST_SIGNING_KEY;
   }
 });
 
@@ -192,5 +202,30 @@ describe("INVARIANTS: Cookie security", () => {
     // Key is used to create signature but never appears in output
     expect(cookie).not.toContain("GUEST_SIGNING_KEY");
     expect(cookie).not.toContain("fallback-key");
+    expect(cookie).not.toContain(TEST_GUEST_SIGNING_KEY);
   });
+});
+
+describe("SECURITY: GUEST_SIGNING_KEY fail-closed", () => {
+  const missingValues: Array<[string, string | undefined]> = [
+    ["unset", undefined],
+    ["blank", "   "],
+    ["placeholder", "replace_me_with_random"],
+  ];
+
+  for (const [label, value] of missingValues) {
+    test(`${label} key: signToken refuses (no fallback)`, () => {
+      if (value === undefined) delete process.env.GUEST_SIGNING_KEY;
+      else process.env.GUEST_SIGNING_KEY = value;
+      const { token } = generateGuestToken();
+      expect(() => signToken(token)).toThrow(GuestSigningKeyMissingError);
+    });
+
+    test(`${label} key: formatGuestCookie refuses (no fallback)`, () => {
+      if (value === undefined) delete process.env.GUEST_SIGNING_KEY;
+      else process.env.GUEST_SIGNING_KEY = value;
+      const { token } = generateGuestToken();
+      expect(() => formatGuestCookie(token)).toThrow(GuestSigningKeyMissingError);
+    });
+  }
 });

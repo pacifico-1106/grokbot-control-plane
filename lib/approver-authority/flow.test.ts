@@ -241,7 +241,7 @@ describe("fulfil re-check", () => {
     await expect(assertApprovalExecutionAuthority((await getApprovalById(t.id, ORG))!)).rejects.toThrow("approver_not_authorized");
   });
 
-  test("no stored approver / zero owners → stop; flag OFF → today's behaviour", async () => {
+  test("no stored approver / zero owners → stop; flag OFF still enforces when requiredApproverKind is set (M2)", async () => {
     const t = await sensitive();
     await approve(t.id, OWNER);
     const approved = (await getApprovalById(t.id, ORG))!;
@@ -249,7 +249,10 @@ describe("fulfil re-check", () => {
     upsertRuntimeMember({ ...member(OWNER, "owner", "disabled") }, { audit: false });
     await expect(assertApprovalExecutionAuthority(approved)).rejects.toThrow("approver_authority_org_has_no_owner");
     delete process.env[FLAG];
-    await assertApprovalExecutionAuthority({ ...approved, approverMemberId: null });
+    // M2: kind 付きチケットはグローバルフラグ OFF でも fulfil 前に再検証する。
+    await expect(assertApprovalExecutionAuthority({ ...approved, approverMemberId: null })).rejects.toThrow("approver_unverified");
+    const noKind = { ...approved, requiredApproverKind: null, approverMemberId: null };
+    await expect(assertApprovalExecutionAuthority(noKind)).resolves.toBeUndefined();
   });
 });
 
